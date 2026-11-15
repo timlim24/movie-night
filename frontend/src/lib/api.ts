@@ -45,13 +45,13 @@ export type LibraryItem = {
   watchedAt?: string
 }
 
-export type Filters = {
-  genres: number[]
-  maxRuntime: number | null
-  yearFrom: number | null
-  yearTo: number | null
-  includeRewatch: boolean
-}
+export type Settings = { includeRewatch: boolean }
+
+export type Era = 'classic' | 'modern' | 'new'
+export type Prefs = { genres: number[]; maxRuntime: number | null; era: Era | null }
+export const EMPTY_PREFS: Prefs = { genres: [], maxRuntime: null, era: null }
+
+export type Combined = { genrePicks: number[][]; maxRuntime: number | null; eras: Era[]; includeRewatch: boolean }
 
 export type RoomMember = {
   userId: string
@@ -62,6 +62,7 @@ export type RoomMember = {
   progress: number
   likes: number
   lastVote?: { movieId: number; like: boolean; at: string } | null
+  prefs?: Partial<Prefs>
 }
 
 export type ResultRow = { movieId: number; likes: string[]; dislikes: string[]; rating: number }
@@ -73,7 +74,8 @@ export type RoomState = {
   isHost: boolean
   isMember: boolean
   members: RoomMember[]
-  filters: Filters
+  filters: Settings
+  combined: Combined
   round: number
   deckSize: number
   deck?: MovieCard[] | null
@@ -86,6 +88,10 @@ export type RoomState = {
 
 export type Friend = { id: string; name: string; picture?: string | null; mascot: MascotId; roomsTogether: number; lastSeenAt?: string }
 export type Genre = { id: number; name: string }
+export type LiveRoom = { code: string; status: RoomState['status']; hostName?: string; joined: boolean }
+export type Invite = LiveRoom & { from: { id: string; name: string; mascot: MascotId }; at: string }
+export type FriendRoom = LiveRoom & { friends: Pick<Friend, 'id' | 'name' | 'mascot'>[] }
+export type Live = { invites: Invite[]; friendRooms: FriendRoom[] }
 export type ImportResult = { imported: number; notFound: string[]; note?: string }
 
 export class ApiError extends Error {
@@ -140,10 +146,14 @@ export const api = {
     request<ImportResult>('POST', '/library/import', { items }),
   importLetterboxd: (username: string) => request<ImportResult>('POST', '/library/letterboxd', { username }),
 
-  createRoom: (filters: Partial<Filters>) => request<RoomState>('POST', '/rooms', { filters }),
+  createRoom: (filters: Partial<Settings> = {}) => request<RoomState>('POST', '/rooms', { filters }),
+  live: () => request<Live>('GET', '/rooms/live'),
   room: (code: string, withDeck = true) => request<RoomState>('GET', `/rooms/${code}?deck=${withDeck ? 1 : 0}`),
   joinRoom: (code: string) => request<RoomState>('POST', `/rooms/${code}/join`),
-  setFilters: (code: string, filters: Filters) => request<RoomState>('PUT', `/rooms/${code}/filters`, filters),
+  setSettings: (code: string, settings: Settings) => request<RoomState>('PUT', `/rooms/${code}/filters`, settings),
+  setPrefs: (code: string, prefs: Prefs) => request<RoomState>('PUT', `/rooms/${code}/prefs`, prefs),
+  invite: (code: string, userIds: string[]) => request<{ invited: string[] }>('POST', `/rooms/${code}/invite`, { userIds }),
+  dismissInvite: (code: string) => request<void>('DELETE', `/rooms/${code}/invite`),
   setRoomMascot: (code: string, mascot: MascotId) => request<RoomState>('POST', `/rooms/${code}/mascot`, { mascot }),
   start: (code: string) => request<RoomState>('POST', `/rooms/${code}/start`),
   nextRound: (code: string) => request<RoomState>('POST', `/rooms/${code}/next-round`),

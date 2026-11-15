@@ -3,17 +3,24 @@ from datetime import datetime, timezone
 
 from boto3.dynamodb.conditions import Key
 
-from app.shared.db import from_db, table, to_db
+from app.shared.db import batch_get, from_db, query_prefix, table, to_db
 
 ROOM_TTL_SECONDS = 2 * 24 * 3600
+INVITE_TTL_SECONDS = 12 * 3600
+PRESENCE_TTL_SECONDS = 6 * 3600
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _ttl() -> int:
-    return int(time.time()) + ROOM_TTL_SECONDS
+def _ttl(seconds: int = ROOM_TTL_SECONDS) -> int:
+    return int(time.time()) + seconds
+
+
+def _alive(item: dict) -> bool:
+    """DynamoDB deletes expired items lazily (up to days later), so check ttl ourselves."""
+    return int(item.get("ttl") or 0) > time.time()
 
 
 def _pk(code: str) -> str:
@@ -83,3 +90,33 @@ def set_vote(code: str, user_id: str, movie_id: int, like: bool) -> None:
         ExpressionAttributeValues={":like": like, ":last": {"movieId": movie_id, "like": like, "at": now()}},
         ConditionExpression="attribute_exists(PK)",
     )
+
+
+def get_metas(codes: list[str]) -> dict[str, dict]:
+    items = batch_get([{"PK": _pk(c), "SK": "META"} for c in dict.fromkeys(codes)])
+    return {i["code"]: i for i in items}
+
+
+# ── invites: a friend's "come join us" note, kept in the invitee's partition ──
+
+def put_invite(to_user: str, invite: dict) -> None:
+    table().put_item(Item=to_db({"PK": f"USER#{to_user}", "SK": f"INVITE#{invite['code']}", "ttl": _ttl(INVITE_TTL_SECONDS), **invite}))
+
+
+def list_invites(user_id: str) -> list[dict]:
+    return [i for i in query_prefix(f"USER#{user_id}", "INVITE#") if _alive(i)]
+
+
+def delete_invite(user_id: str, code: str) -> None:
+    table().delete_item(Key={"PK": f"USER#{user_id}", "SK": f"INVITE#{code}"})
+
+
+# ── presence: which room a user is in right now, so friends can hop in ──
+
+def set_presence(user_id: str, code: str) -> None:
+    table().put_item(Item={"PK": f"USER#{user_id}", "SK": "PRESENCE", "code": code, "at": now(), "ttl": _ttl(PRESENCE_TTL_SECONDS)})
+
+
+def get_presences(user_ids: list[str]) -> dict[str, dict]:
+    items = batch_get([{"PK": f"USER#{u}", "SK": "PRESENCE"} for u in dict.fromkeys(user_ids)])
+    return {i["PK"].removeprefix("USER#"): i for i in items if _alive(i)}

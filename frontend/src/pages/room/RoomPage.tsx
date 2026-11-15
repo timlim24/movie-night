@@ -5,13 +5,14 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useProfile } from '../../App'
 import { Curtain } from '../../components/Atmosphere'
 import { Mascot, type Mood } from '../../components/Mascot'
-import { Audience, RoomTicket, useReactions } from '../../components/Room'
+import { Audience, useReactions } from '../../components/Room'
 import { SwipeDeck, type DeckHandle } from '../../components/SwipeDeck'
-import { Countdown, TicketButton, Toggle } from '../../components/Ui'
-import { api, ApiError, MASCOTS, type Filters, type Genre, type MovieCard, type RoomState } from '../../lib/api'
+import { Countdown, TicketButton } from '../../components/Ui'
+import { api, ApiError, type MovieCard, type RoomState } from '../../lib/api'
 import { prefersReducedMotion } from '../../lib/pointer'
 import { useRoom } from '../../lib/useRoom'
 import { useToast } from '../../lib/toast'
+import { Lobby } from './Lobby'
 
 const CONFETTI_COLORS = ['#ffb547', '#ff3d57', '#3ddc97', '#8b5cf6', '#ff5fa2', '#fff4dc']
 
@@ -23,22 +24,6 @@ function celebrate() {
   fire(0.9, 120)
   window.setTimeout(() => confetti({ particleCount: 140, spread: 120, origin: { y: 0.35 }, colors: CONFETTI_COLORS, zIndex: 999 }), 250)
 }
-
-let genreCache: Genre[] | null = null
-
-const RUNTIMES: { label: string; value: number | null }[] = [
-  { label: 'Будь-яка', value: null },
-  { label: 'до 1,5 год', value: 95 },
-  { label: 'до 2 год', value: 120 },
-  { label: 'до 2,5 год', value: 150 },
-]
-
-const ERAS: { label: string; from: number | null; to: number | null }[] = [
-  { label: 'Будь-які роки', from: null, to: null },
-  { label: 'Класика · до 1990', from: null, to: 1989 },
-  { label: '1990–2009', from: 1990, to: 2009 },
-  { label: 'Нові · 2010+', from: 2010, to: null },
-]
 
 function RoomBar({ room, label }: { room: RoomState; label: string }) {
   return (
@@ -82,153 +67,6 @@ function JoinGate({ room, onJoin }: { room: RoomState; onJoin: () => Promise<voi
           </TicketButton>
         )}
       </motion.div>
-    </section>
-  )
-}
-
-function FilterPanel({ room, onChange }: { room: RoomState; onChange: (f: Filters) => void }) {
-  const [genres, setGenres] = useState<Genre[]>(genreCache ?? [])
-  const f = room.filters
-  const editable = room.isHost
-  useEffect(() => {
-    if (!genreCache)
-      api.genres().then((g) => {
-        genreCache = g
-        setGenres(g)
-      })
-  }, [])
-  const set = (patch: Partial<Filters>) => onChange({ ...f, ...patch })
-  return (
-    <section className={`panel filters ${editable ? '' : 'readonly'}`}>
-      <div className="filters-head">
-        <h3>Що в настрої?</h3>
-        {!editable && <span className="muted small">налаштовує ведучий</span>}
-      </div>
-      <div className="chips">
-        {genres.map((g) => {
-          const on = f.genres.includes(g.id)
-          return (
-            <motion.button
-              key={g.id}
-              type="button"
-              className={`chip ${on ? 'on' : ''}`}
-              disabled={!editable}
-              whileTap={{ scale: 0.85 }}
-              animate={on ? { scale: [1, 1.12, 1] } : {}}
-              onClick={() => set({ genres: on ? f.genres.filter((x) => x !== g.id) : [...f.genres, g.id].slice(-6) })}
-            >
-              {g.name}
-            </motion.button>
-          )
-        })}
-      </div>
-      <div className="filter-row">
-        <span className="label">Тривалість</span>
-        <div className="segmented">
-          {RUNTIMES.map((r) => (
-            <button key={r.label} type="button" disabled={!editable} className={f.maxRuntime === r.value ? 'on' : ''} onClick={() => set({ maxRuntime: r.value })}>
-              {f.maxRuntime === r.value && <motion.span layoutId="seg-runtime" className="seg-pill" />}
-              <span>{r.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="filter-row">
-        <span className="label">Епоха</span>
-        <div className="segmented">
-          {ERAS.map((e) => {
-            const on = f.yearFrom === e.from && f.yearTo === e.to
-            return (
-              <button key={e.label} type="button" disabled={!editable} className={on ? 'on' : ''} onClick={() => set({ yearFrom: e.from, yearTo: e.to })}>
-                {on && <motion.span layoutId="seg-era" className="seg-pill" />}
-                <span>{e.label}</span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-      <label className="filter-row rewatch-row">
-        <Toggle on={f.includeRewatch} disabled={!editable} onChange={(v) => set({ includeRewatch: v })} label="Пропонувати фільми, які всі готові передивитись" />
-        <span>Додавати фільми, які всі, хто бачив, готові передивитись</span>
-      </label>
-    </section>
-  )
-}
-
-function Lobby({ room, meId, onRoom }: { room: RoomState; meId?: string; onRoom: (r: RoomState) => void }) {
-  const toast = useToast()
-  const [starting, setStarting] = useState(false)
-  const [filters, setFilters] = useState(room.filters)
-  const saveTimer = useRef<number>()
-  const view = useMemo(() => ({ ...room, filters: room.isHost ? filters : room.filters }), [room, filters])
-
-  const changeFilters = (f: Filters) => {
-    setFilters(f)
-    window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => {
-      api.setFilters(room.code, f).then(onRoom).catch((e) => toast(e instanceof ApiError ? e.message : 'Не збереглось', 'error'))
-    }, 500)
-  }
-
-  const cycleMascot = async () => {
-    const me = room.members.find((m) => m.userId === meId)
-    if (!me) return
-    const next = MASCOTS[(MASCOTS.indexOf(me.mascot) + 1) % MASCOTS.length]
-    try {
-      onRoom(await api.setRoomMascot(room.code, next))
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const start = async () => {
-    setStarting(true)
-    window.clearTimeout(saveTimer.current)
-    try {
-      await api.setFilters(room.code, filters)
-      onRoom(await api.start(room.code))
-    } catch (e) {
-      toast(e instanceof ApiError ? e.message : 'Не вдалося стартувати', 'error')
-      setStarting(false)
-    }
-  }
-
-  const moods: Record<string, Mood> = Object.fromEntries(room.members.map((m) => [m.userId, m.isHost ? 'excited' : 'happy']))
-
-  return (
-    <section className="lobby">
-      <RoomTicket code={room.code} />
-      <div className="lobby-audience">
-        <Audience members={room.members} meId={meId} moods={moods} onTapMe={cycleMascot} />
-        <p className="muted small center">Торкнись свого маскота, щоб змінити його</p>
-        <Link to="/library" className="link-btn center">
-          Додай переглянуті фільми — підбірка буде точнішою →
-        </Link>
-      </div>
-      <FilterPanel room={view} onChange={changeFilters} />
-      <div className="lobby-cta">
-        {room.isHost ? (
-          <TicketButton big onClick={start} loading={starting}>
-            {room.members.length > 1 ? `Почати сеанс · ${room.members.length} глядачів` : 'Почати сеанс самому'}
-          </TicketButton>
-        ) : (
-          <div className="waiting-host">
-            <span className="dots">
-              <i />
-              <i />
-              <i />
-            </span>
-            Чекаємо, поки ведучий почне сеанс
-          </div>
-        )}
-      </div>
-      <AnimatePresence>
-        {starting && (
-          <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <Countdown label="Проєктор розігрівається — підбираємо фільми під смаки всіх…" />
-          </motion.div>
-        )}
-      </AnimatePresence>
     </section>
   )
 }

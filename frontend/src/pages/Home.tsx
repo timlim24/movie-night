@@ -2,12 +2,14 @@ import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProfile } from '../App'
+import { FriendRooms, Invites } from '../components/LiveRooms'
 import { Mascot } from '../components/Mascot'
 import { CodeInput } from '../components/Room'
 import { TicketButton } from '../components/Ui'
 import { api, ApiError, type Friend } from '../lib/api'
 import { getConfig } from '../lib/config'
 import { plural } from '../lib/plural'
+import { useLive } from '../lib/useLive'
 import { useToast } from '../lib/toast'
 
 const greeting = () => {
@@ -26,6 +28,7 @@ export default function Home() {
   const [libCount, setLibCount] = useState<number | null>(null)
   const [friends, setFriends] = useState<Friend[]>([])
   const { donateUrl } = getConfig()
+  const { live, dismiss } = useLive()
 
   useEffect(() => {
     api.library().then((l) => setLibCount(l.length)).catch(() => {})
@@ -35,7 +38,7 @@ export default function Home() {
   const create = async () => {
     setCreating(true)
     try {
-      const room = await api.createRoom({})
+      const room = await api.createRoom()
       navigate(`/r/${room.code}`)
     } catch (e) {
       toast(e instanceof ApiError ? e.message : 'Не вдалося створити кімнату', 'error')
@@ -53,6 +56,13 @@ export default function Home() {
           <p className="muted">Що дивимось сьогодні?</p>
         </div>
       </header>
+
+      {live && live.invites.length > 0 && (
+        <section className="invites">
+          <Invites invites={live.invites} onDismiss={dismiss} />
+        </section>
+      )}
+      {live && <FriendRooms rooms={live.friendRooms} invites={live.invites} />}
 
       <motion.section
         className="home-actions"
@@ -94,14 +104,25 @@ export default function Home() {
       </motion.section>
 
       {donateUrl && (
-        <a className="donate" href={donateUrl} target="_blank" rel="noreferrer">
-          <span>💛💙</span>
+        <motion.a
+          className="donate"
+          href={donateUrl}
+          target="_blank"
+          rel="noreferrer"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 1.1 }}
+          whileHover={{ y: -3 }}
+        >
+          <span className="donate-jar" aria-hidden="true">
+            <Mascot kind="popcorn" size={56} mood="love" />
+          </span>
           <div>
-            <b>Квиток на добру справу</b>
-            <p>Сподобався сервіс? Задонать на ЗСУ — це наша «ціна квитка».</p>
+            <b>Підтримайте розробників</b>
+            <p>Movie Night зробили студенти УКУ. Якщо вечір вдався — пригостіть нас попкорном: це оплачує сервери й нові фічі.</p>
           </div>
           <span className="donate-arrow">→</span>
-        </a>
+        </motion.a>
       )}
     </div>
   )

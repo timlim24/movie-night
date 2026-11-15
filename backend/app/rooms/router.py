@@ -7,16 +7,22 @@ from app.shared.auth import CurrentUser, current_user
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
 
 
-class Filters(BaseModel):
-    genres: list[int] = []
-    maxRuntime: int | None = None
-    yearFrom: int | None = None
-    yearTo: int | None = None
+class Settings(BaseModel):
     includeRewatch: bool = True
 
 
+class Prefs(BaseModel):
+    genres: list[int] = []
+    maxRuntime: int | None = None
+    era: str | None = None
+
+
 class CreateBody(BaseModel):
-    filters: Filters = Filters()
+    filters: Settings = Settings()
+
+
+class InviteBody(BaseModel):
+    userIds: list[str]
 
 
 class VoteBody(BaseModel):
@@ -37,6 +43,12 @@ def create(body: CreateBody, user: CurrentUser = Depends(current_user)) -> dict:
     return service.create(user, body.filters.model_dump())
 
 
+@router.get("/live")
+def live(user: CurrentUser = Depends(current_user)) -> dict:
+    """Invites + friends' open rooms. Declared before /{code} so 'live' is not read as a room code."""
+    return service.live(user)
+
+
 @router.get("/{code}")
 def get_room(code: str, deck: int = 1, user: CurrentUser = Depends(current_user)) -> dict:
     return service.state(user, code, include_deck=bool(deck))
@@ -48,8 +60,23 @@ def join(code: str, user: CurrentUser = Depends(current_user)) -> dict:
 
 
 @router.put("/{code}/filters")
-def filters(code: str, body: Filters, user: CurrentUser = Depends(current_user)) -> dict:
-    return service.update_filters(user, code, body.model_dump())
+def settings(code: str, body: Settings, user: CurrentUser = Depends(current_user)) -> dict:
+    return service.update_settings(user, code, body.model_dump())
+
+
+@router.put("/{code}/prefs")
+def prefs(code: str, body: Prefs, user: CurrentUser = Depends(current_user)) -> dict:
+    return service.set_prefs(user, code, body.model_dump())
+
+
+@router.post("/{code}/invite")
+def invite(code: str, body: InviteBody, user: CurrentUser = Depends(current_user)) -> dict:
+    return service.invite(user, code, body.userIds)
+
+
+@router.delete("/{code}/invite", status_code=204)
+def dismiss_invite(code: str, user: CurrentUser = Depends(current_user)) -> None:
+    service.dismiss_invite(user, code)
 
 
 @router.post("/{code}/mascot")

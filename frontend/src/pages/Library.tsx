@@ -202,7 +202,7 @@ function PosterTile({ item, onChange, onRemove }: { item: LibraryItem; onChange:
   const [glare, setGlare] = useState({ x: 50, y: 50 })
   return (
     <motion.article
-      layout
+      layout="position"
       className={`poster-tile ${item.rewatch ? 'rewatch' : ''}`}
       initial={{ opacity: 0, scale: 0.8, y: 30 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -326,13 +326,13 @@ export default function Library() {
           <p>{filter === 'all' ? 'Поки порожньо. Знайди фільм вище або підтягни історію з Letterboxd.' : 'Ще немає фільмів, які ти готовий передивитись.'}</p>
         </div>
       ) : (
-        <motion.div className="poster-grid" layout>
+        <div className="poster-grid">
           <AnimatePresence>
             {shown.map((item) => (
               <PosterTile key={item.movieId} item={item} onChange={(p) => patch(item, p)} onRemove={() => remove(item)} />
             ))}
           </AnimatePresence>
-        </motion.div>
+        </div>
       )}
     </div>
   )

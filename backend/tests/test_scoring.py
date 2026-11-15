@@ -5,6 +5,7 @@ from app.recommendations.scoring import (
     Filters,
     Member,
     excluded_ids,
+    genre_combos,
     genre_preferences,
     passes_filters,
     pick_seeds,
@@ -57,7 +58,7 @@ def test_seeds_skip_films_the_member_disliked():
 
 
 def test_filters():
-    f = Filters(genres=[COMEDY], max_runtime=120, year_from=2000)
+    f = Filters(genre_picks=[[COMEDY]], max_runtime=120, year_ranges=[(2000, None)])
     assert passes_filters(movie(10, [COMEDY]), f)
     assert not passes_filters(movie(10, [HORROR]), f)
     assert not passes_filters(movie(10, [COMEDY], runtime=150), f)
@@ -82,3 +83,39 @@ def test_low_vote_count_dampens_rating():
     obscure = score(Candidate(movie(30, [DRAMA], rating=9.5, votes=40)), 2, prefs, Filters(), {})
     known = score(Candidate(movie(31, [DRAMA], rating=8.0, votes=5000)), 2, prefs, Filters(), {})
     assert known.score > obscure.score
+
+
+def test_any_members_genre_passes_but_nobodys_does_not():
+    f = Filters(genre_picks=[[COMEDY], [HORROR]])
+    assert passes_filters(movie(10, [COMEDY]), f)
+    assert passes_filters(movie(11, [HORROR, DRAMA]), f)
+    assert not passes_filters(movie(12, [DRAMA]), f)
+
+
+def test_era_union():
+    f = Filters(year_ranges=[(None, 1989), (2010, None)])
+    assert passes_filters(movie(10, [DRAMA], year=1975), f)
+    assert passes_filters(movie(11, [DRAMA], year=2019), f)
+    assert not passes_filters(movie(12, [DRAMA], year=2000), f)
+
+
+def test_film_covering_everyones_genres_ranks_first_and_says_why():
+    f = Filters(genre_picks=[[COMEDY], [HORROR]])
+    names = {COMEDY: "Комедія", HORROR: "Жахи"}
+    both = score(Candidate(movie(40, [COMEDY, HORROR])), 2, {}, f, names)
+    one = score(Candidate(movie(41, [COMEDY], rating=8.5, votes=5000)), 2, {}, f, names)
+    assert both.score > one.score
+    assert both.reasons[0] == "Під настрій усіх: комедія + жахи"
+
+
+def test_genre_combos_cover_every_member():
+    combos = genre_combos([[COMEDY, DRAMA], [HORROR], [COMEDY]])
+    assert combos[0] == sorted([COMEDY, HORROR])
+    assert all(len(c) >= 2 for c in combos)
+    assert genre_combos([[COMEDY]]) == []
+    assert genre_combos([[COMEDY], [COMEDY]]) == []  # one shared genre: the OR query already covers it
+
+
+def test_legacy_room_filters_still_load():
+    f = Filters.from_dict({"genres": [COMEDY], "yearFrom": 2000})
+    assert f.genre_picks == [[COMEDY]] and f.year_ranges == [(2000, None)]

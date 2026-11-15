@@ -69,17 +69,43 @@ print("   ", imp)
 rss = bohdan.post("/api/library/letterboxd", json={"username": "davidehrlich"})
 print(f"{'✓' if rss.status_code < 400 else '!'} Letterboxd RSS: {rss.status_code} {rss.text[:120]}")
 
-room = check(anna.post("/api/rooms", json={"filters": {"maxRuntime": 160}}), "create room")
+room = check(anna.post("/api/rooms", json={"filters": {"includeRewatch": True}}), "create room")
 code = room["code"]
 print("    code", code)
 preview = check(bohdan.get(f"/api/rooms/{code}"), "non-member preview")
 assert preview["isMember"] is False
+
+# Bohdan was in a room with Anna in earlier runs, so they are friends: Anna can call him in.
+inv = check(anna.post(f"/api/rooms/{code}/invite", json={"userIds": [bohdan.get("/api/me").json()["id"]]}), "invite friend")
+assert inv["invited"], inv
+r = anna.post(f"/api/rooms/{code}/invite", json={"userIds": ["not-a-friend"]})
+print(f"{'✓' if r.status_code == 403 else '✗'} cannot invite strangers: {r.status_code}")
+live = check(bohdan.get("/api/rooms/live"), "live (invites + friends' rooms)")
+assert any(i["code"] == code for i in live["invites"]), live
+assert any(fr["code"] == code for fr in live["friendRooms"]), live
+print(f"    invite from {live['invites'][0]['from']['name']}, friend rooms: {[fr['code'] for fr in live['friendRooms']]}")
+
 check(bohdan.post(f"/api/rooms/{code}/join"), "join")
+live = check(bohdan.get("/api/rooms/live"), "invite gone after joining")
+assert not any(i["code"] == code for i in live["invites"]), live
+
+COMEDY, HORROR, ANIMATION = 35, 27, 16
+check(anna.put(f"/api/rooms/{code}/prefs", json={"genres": [COMEDY, ANIMATION], "maxRuntime": 150, "era": None}), "anna prefs")
+st = check(bohdan.put(f"/api/rooms/{code}/prefs", json={"genres": [HORROR, COMEDY], "maxRuntime": 120, "era": "new"}), "bohdan prefs")
+print("    combined:", st["combined"])
+assert st["combined"]["maxRuntime"] == 120 and st["combined"]["eras"] == ["new"]
+r = bohdan.put(f"/api/rooms/{code}/prefs", json={"genres": [1, 2, 3, 4]})
+print(f"{'✓' if r.status_code == 400 else '✗'} max 3 genres: {r.status_code}")
 r = bohdan.post(f"/api/rooms/{code}/start")
 print(f"{'✓' if r.status_code == 403 else '✗'} non-host cannot start: {r.status_code}")
 started = check(anna.post(f"/api/rooms/{code}/start"), "start (deck build)")
 deck = started["deck"]
 print(f"    deck: {len(deck)} films, first: {deck[0]['title']} — {deck[0]['reasons']}")
+for card in deck:
+    assert set(card["genreIds"]) & {COMEDY, ANIMATION} or set(card["genreIds"]) & {HORROR, COMEDY}, card["title"]
+    assert card["year"] >= 2010 and (card["runtime"] or 0) <= 120, (card["title"], card["year"], card["runtime"])
+both = [c["title"] for c in deck if COMEDY in c["genreIds"]]
+print(f"    comedies (both picked it): {len(both)}/{len(deck)}; top 5: {[c['title'] for c in deck[:5]]}")
 for i, card in enumerate(deck):
     anna.post(f"/api/rooms/{code}/votes", json={"movieId": card["id"], "like": i % 2 == 0})
     bohdan.post(f"/api/rooms/{code}/votes", json={"movieId": card["id"], "like": i % 3 == 0})

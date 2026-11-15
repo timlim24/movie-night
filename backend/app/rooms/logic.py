@@ -58,3 +58,48 @@ def progress(deck_ids: list[int], member: dict) -> int:
 
 def everyone_done(deck_ids: list[int], members: list[dict]) -> bool:
     return bool(members) and all(progress(deck_ids, m) >= len(deck_ids) for m in members)
+
+
+# ── Everyone's mood for tonight ──────────────────────────────────────────────
+# Each member picks up to 3 genres, a max runtime and an era. The room combines them:
+# genres stay per person (the deck prefers films that cover *everyone's* picks),
+# the strictest runtime wins, and eras are a union (any picked era is fine).
+
+MAX_GENRES = 3
+ERAS: dict[str, tuple[int | None, int | None]] = {
+    "classic": (None, 1989),
+    "modern": (1990, 2009),
+    "new": (2010, None),
+}
+
+
+def clean_prefs(raw: dict | None) -> dict:
+    """Validates one member's picks. Raises ValueError with a user-facing message."""
+    raw = raw or {}
+    genres = list(dict.fromkeys(int(g) for g in (raw.get("genres") or [])))
+    if len(genres) > MAX_GENRES:
+        raise ValueError(f"Можна обрати до {MAX_GENRES} жанрів")
+    max_runtime = raw.get("maxRuntime")
+    if max_runtime is not None:
+        max_runtime = int(max_runtime)
+        if not 60 <= max_runtime <= 400:
+            raise ValueError("Тривалість — від 60 до 400 хвилин")
+    era = raw.get("era") or None
+    if era is not None and era not in ERAS:
+        raise ValueError("Невідома епоха")
+    return {"genres": genres, "maxRuntime": max_runtime, "era": era}
+
+
+def combine(members: list[dict], include_rewatch: bool = True) -> dict:
+    """All members' prefs → the filters the deck is built with (and the summary the lobby shows)."""
+    prefs = [m.get("prefs") or {} for m in members]
+    picks = [list(p["genres"]) for p in prefs if p.get("genres")]
+    runtimes = [int(p["maxRuntime"]) for p in prefs if p.get("maxRuntime")]
+    eras = [p["era"] for p in prefs if p.get("era") in ERAS]
+    return {
+        "genrePicks": picks,
+        "maxRuntime": min(runtimes) if runtimes else None,
+        "eras": sorted(set(eras), key=list(ERAS).index),
+        "yearRanges": [list(ERAS[e]) for e in eras],
+        "includeRewatch": include_rewatch,
+    }

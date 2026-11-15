@@ -48,14 +48,43 @@ export function Background() {
   )
 }
 
+const EASE = [0.7, 0, 0.18, 1] as const
+
+/**
+ * Theatre curtain: velvet panels with gold fringe first gather toward the wings, then slide away,
+ * while warm stage light spills through the gap; the scalloped valance lifts last.
+ */
 export function Curtain() {
   if (prefersReducedMotion()) return null
-  const t = { duration: 1.05, ease: [0.76, 0, 0.24, 1] as const, delay: 0.08 }
+  const panel = (side: 'left' | 'right') => {
+    const dir = side === 'left' ? -1 : 1
+    return (
+      <motion.div
+        key={side}
+        className={`curtain-panel ${side}`}
+        initial={{ x: '0%', scaleX: 1 }}
+        animate={{ x: ['0%', `${dir * 6}%`, `${dir * 104}%`], scaleX: [1, 0.62, 0.4] }}
+        transition={{ duration: 1.15, ease: EASE, times: [0, 0.42, 1], delay: 0.08 }}
+      >
+        <div className="curtain-sheen" />
+        <div className="curtain-fringe" />
+      </motion.div>
+    )
+  }
   return (
     <div className="curtain" aria-hidden="true">
-      <motion.div className="curtain-panel left" initial={{ x: '0%' }} animate={{ x: '-102%' }} transition={t} />
-      <motion.div className="curtain-panel right" initial={{ x: '0%' }} animate={{ x: '102%' }} transition={t} />
-      <motion.div className="curtain-valance" initial={{ y: 0 }} animate={{ y: '-110%' }} transition={{ ...t, delay: 0.45 }} />
+      <motion.div
+        className="curtain-light"
+        initial={{ opacity: 0, scaleX: 0.2 }}
+        animate={{ opacity: [0, 1, 0], scaleX: [0.2, 1, 1.6] }}
+        transition={{ duration: 1.2, times: [0, 0.35, 1], delay: 0.1 }}
+      />
+      {panel('left')}
+      {panel('right')}
+      <motion.div className="curtain-valance" initial={{ y: 0 }} animate={{ y: '-115%' }} transition={{ duration: 0.75, ease: EASE, delay: 0.62 }}>
+        <div className="valance-gold" />
+        <div className="valance-cloth" />
+      </motion.div>
     </div>
   )
 }

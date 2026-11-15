@@ -8,6 +8,7 @@ from app.recommendations.scoring import (
     Filters,
     Member,
     excluded_ids,
+    genre_combos,
     genre_preferences,
     passes_filters,
     pick_seeds,
@@ -23,23 +24,37 @@ MAX_REWATCH_CARDS = 3
 
 def _discover_queries(filters: Filters, prefs: dict[int, float]) -> list[dict]:
     base: dict = {"vote_count.gte": filters.min_votes}
-    if filters.genres:
-        base["with_genres"] = "|".join(map(str, filters.genres))
-    elif prefs:
-        top = sorted(prefs, key=prefs.get, reverse=True)[:3]
-        base["with_genres"] = "|".join(map(str, top))
     if filters.max_runtime:
         base["with_runtime.lte"] = filters.max_runtime
-    if filters.year_from:
-        base["primary_release_date.gte"] = f"{filters.year_from}-01-01"
-    if filters.year_to:
-        base["primary_release_date.lte"] = f"{filters.year_to}-12-31"
-    return [
-        {**base, "sort_by": "popularity.desc", "page": 1},
-        {**base, "sort_by": "popularity.desc", "page": 2},
-        {**base, "sort_by": "vote_average.desc", "vote_count.gte": max(1000, filters.min_votes), "page": 1},
-        {**base, "sort_by": "vote_average.desc", "vote_count.gte": max(1000, filters.min_votes), "page": 2},
+    if filters.year_ranges:
+        # TMDB takes one date range: ask for the span of all picked eras, scoring.passes_filters trims the gaps.
+        lows = [lo for lo, _ in filters.year_ranges]
+        highs = [hi for _, hi in filters.year_ranges]
+        if None not in lows:
+            base["primary_release_date.gte"] = f"{min(lows)}-01-01"
+        if None not in highs:
+            base["primary_release_date.lte"] = f"{max(highs)}-12-31"
+
+    top_rated = {"sort_by": "vote_average.desc", "vote_count.gte": max(1000, filters.min_votes)}
+    queries: list[dict] = []
+    # Films that mix several members' genres (comma = AND in TMDB).
+    for combo in genre_combos(filters.genre_picks):
+        g = {"with_genres": ",".join(map(str, combo))}
+        queries += [{**base, **g, "sort_by": "popularity.desc", "page": 1}, {**base, **g, **top_rated, "vote_count.gte": 300, "page": 1}]
+
+    if filters.genre_picks:
+        any_genre = {"with_genres": "|".join(map(str, filters.genres))}  # pipe = OR
+    elif prefs:
+        any_genre = {"with_genres": "|".join(map(str, sorted(prefs, key=prefs.get, reverse=True)[:3]))}
+    else:
+        any_genre = {}
+    queries += [
+        {**base, **any_genre, "sort_by": "popularity.desc", "page": 1},
+        {**base, **any_genre, "sort_by": "popularity.desc", "page": 2},
+        {**base, **any_genre, **top_rated, "page": 1},
+        {**base, **any_genre, **top_rated, "page": 2},
     ]
+    return queries
 
 
 def build_deck(members: list[Member], filters: Filters, exclude: set[int] | None = None, size: int = 20) -> list[dict]:

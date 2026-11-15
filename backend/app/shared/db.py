@@ -5,6 +5,8 @@ Single-table design. Each module owns its own key prefixes and never reads anoth
   social:   PK=USER#<id>  SK=FRIEND#<otherId>
   library:  PK=USER#<id>  SK=MOVIE#<tmdbId>
   rooms:    PK=ROOM#<code> SK=META | MEMBER#<userId>
+            PK=USER#<id>  SK=INVITE#<code>   (written by a friend who is in that room)
+            PK=USER#<id>  SK=PRESENCE        (the room this user is in now; read by their friends)
 """
 
 from decimal import Decimal
@@ -54,3 +56,19 @@ def query_prefix(pk: str, sk_prefix: str) -> list[dict]:
         if "LastEvaluatedKey" not in resp:
             return items
         kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+
+def batch_get(keys: list[dict]) -> list[dict]:
+    """Up to any number of {PK, SK} keys; missing items are simply absent from the result."""
+    out: list[dict] = []
+    name = table().name
+    client = table().meta.client  # the resource's client already converts DynamoDB types
+    for i in range(0, len(keys), 100):
+        request = {name: {"Keys": keys[i : i + 100]}}
+        for _ in range(5):
+            resp = client.batch_get_item(RequestItems=request)
+            out.extend(from_db(r) for r in resp.get("Responses", {}).get(name, []))
+            request = resp.get("UnprocessedKeys") or {}
+            if not request:
+                break
+    return out

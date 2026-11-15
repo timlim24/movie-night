@@ -63,6 +63,18 @@ resource "aws_cognito_identity_provider" "google" {
     picture        = "picture"
     username       = "sub"
   }
+
+  # Cognito fills in Google's endpoints itself; without this every plan shows a no-op "change".
+  lifecycle {
+    ignore_changes = [
+      provider_details["attributes_url"],
+      provider_details["attributes_url_add_attributes"],
+      provider_details["authorize_url"],
+      provider_details["oidc_issuer"],
+      provider_details["token_request_method"],
+      provider_details["token_url"],
+    ]
+  }
 }
 
 # Public SPA client: authorization code flow + PKCE, no client secret.

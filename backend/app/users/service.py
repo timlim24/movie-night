@@ -55,3 +55,7 @@ def friends(user_id: str) -> list[dict]:
         if p:
             out.append({**public(p), "roomsTogether": i.get("roomsTogether", 1), "lastSeenAt": i.get("lastSeenAt")})
     return sorted(out, key=lambda f: f.get("lastSeenAt") or "", reverse=True)
+
+
+def friend_ids(user_id: str) -> list[str]:
+    return [i["friendId"] for i in repo.list_friends(user_id)]

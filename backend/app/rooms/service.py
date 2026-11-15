@@ -12,30 +12,12 @@ from app.shared.auth import CurrentUser
 from app.shared.errors import Conflict, DomainError, Forbidden, NotFound
 from app.users import api as users
 
-GENRE_LIMIT = 6
+MAX_INVITES_PER_CALL = 20
 
 
-def clean_filters(raw: dict | None) -> dict:
-    raw = raw or {}
-    genres = [int(g) for g in (raw.get("genres") or [])][:GENRE_LIMIT]
-    max_runtime = raw.get("maxRuntime")
-    if max_runtime is not None:
-        max_runtime = int(max_runtime)
-        if not 60 <= max_runtime <= 400:
-            raise DomainError("Тривалість — від 60 до 400 хвилин")
-    year_from, year_to = raw.get("yearFrom"), raw.get("yearTo")
-    for y in (year_from, year_to):
-        if y is not None and not 1900 <= int(y) <= 2100:
-            raise DomainError("Рік має бути між 1900 і 2100")
-    if year_from and year_to and int(year_from) > int(year_to):
-        raise DomainError("Рік «від» більший за рік «до»")
-    return {
-        "genres": genres,
-        "maxRuntime": max_runtime,
-        "yearFrom": int(year_from) if year_from else None,
-        "yearTo": int(year_to) if year_to else None,
-        "includeRewatch": bool(raw.get("includeRewatch", True)),
-    }
+def clean_settings(raw: dict | None) -> dict:
+    """Room-wide settings the host controls. Everything else is each member's own prefs."""
+    return {"includeRewatch": bool((raw or {}).get("includeRewatch", True))}
 
 
 def _member_from_profile(profile: dict) -> dict:
@@ -81,9 +63,11 @@ def view(user: CurrentUser, meta: dict, members: list[dict], include_deck: bool 
             "progress": logic.progress(deck_ids, m),
             "likes": sum(1 for k, v in (m.get("votes") or {}).items() if v and int(k) in deck_ids),
             "lastVote": m.get("lastVote"),
+            "prefs": m.get("prefs") or {},
         }
         for m in members
     ]
+    settings = meta.get("filters") or {}
     base = {
         "code": meta["code"],
         "status": meta["status"],
@@ -91,7 +75,8 @@ def view(user: CurrentUser, meta: dict, members: list[dict], include_deck: bool 
         "isHost": meta["hostId"] == user.id,
         "isMember": me is not None,
         "members": public_members,
-        "filters": meta.get("filters") or {},
+        "filters": clean_settings(settings),
+        "combined": logic.combine(members, clean_settings(settings)["includeRewatch"]),
         "round": meta.get("round", 0),
         "deckSize": len(deck),
         "createdAt": meta.get("createdAt"),
@@ -114,8 +99,9 @@ def create(user: CurrentUser, filters: dict | None) -> dict:
     profile = users.ensure_profile(user)
     meta = {
         "hostId": user.id,
+        "hostName": profile["name"],
         "status": "lobby",
-        "filters": clean_filters(filters),
+        "filters": clean_settings(filters),
         "round": 0,
         "seenIds": [],
         "createdAt": repo.now(),
@@ -123,6 +109,7 @@ def create(user: CurrentUser, filters: dict | None) -> dict:
     for _ in range(8):
         code = logic.new_code()
         if repo.create_room({**meta, "code": code}, _member_from_profile(profile)):
+            repo.set_presence(user.id, code)
             return state(user, code)
     raise Conflict("Не вдалося створити кімнату, спробуй ще раз")
 
@@ -134,7 +121,9 @@ def state(user: CurrentUser, code: str, include_deck: bool = True) -> dict:
 
 def join(user: CurrentUser, code: str) -> dict:
     meta, members = _load(code)
+    repo.delete_invite(user.id, meta["code"])
     if any(m["userId"] == user.id for m in members):
+        repo.set_presence(user.id, meta["code"])
         return view(user, meta, members)
     if meta["status"] == "done":
         raise Conflict("Ця кімната вже обрала фільм")
@@ -142,17 +131,32 @@ def join(user: CurrentUser, code: str) -> dict:
         raise Conflict(f"У кімнаті вже {logic.MAX_MEMBERS} людей")
     profile = users.ensure_profile(user)
     repo.put_member(meta["code"], _member_from_profile(profile))
+    repo.set_presence(user.id, meta["code"])
     users.connect_friends(user.id, [m["userId"] for m in members])
     return state(user, meta["code"])
 
 
-def update_filters(user: CurrentUser, code: str, filters: dict) -> dict:
+def update_settings(user: CurrentUser, code: str, settings: dict) -> dict:
     meta, _ = _load(code)
     _require_host(user, meta)
     if meta["status"] != "lobby":
-        raise Conflict("Фільтри можна змінити лише до старту")
-    repo.update_meta(meta["code"], {"filters": clean_filters(filters)})
+        raise Conflict("Налаштування можна змінити лише до старту")
+    repo.update_meta(meta["code"], {"filters": clean_settings(settings)})
     return state(user, meta["code"])
+
+
+def set_prefs(user: CurrentUser, code: str, prefs: dict) -> dict:
+    """Every member says what they are in the mood for: up to 3 genres, runtime, era."""
+    meta, members = _load(code)
+    _require_member(user, members)
+    if meta["status"] != "lobby":
+        raise Conflict("Побажання можна змінити лише до старту")
+    try:
+        clean = logic.clean_prefs(prefs)
+    except ValueError as e:
+        raise DomainError(str(e)) from e
+    repo.update_member(meta["code"], user.id, {"prefs": clean})
+    return state(user, meta["code"], include_deck=False)
 
 
 def set_mascot(user: CurrentUser, code: str, mascot: str) -> dict:
@@ -168,7 +172,9 @@ def _build_deck(meta: dict, members: list[dict], exclude: set[int]) -> list[dict
     with ThreadPoolExecutor(max_workers=max(1, len(members))) as pool:
         libraries = list(pool.map(lambda m: library.get_library(m["userId"]), members))
     rec_members = [recs.Member(user_id=m["userId"], name=m["name"], library=lib) for m, lib in zip(members, libraries)]
-    return recs.build_deck(rec_members, recs.Filters.from_dict(meta.get("filters")), exclude=exclude)
+    include_rewatch = clean_settings(meta.get("filters"))["includeRewatch"]
+    filters = recs.Filters.from_dict(logic.combine(members, include_rewatch))
+    return recs.build_deck(rec_members, filters, exclude=exclude)
 
 
 def start(user: CurrentUser, code: str) -> dict:
@@ -220,3 +226,65 @@ def choose(user: CurrentUser, code: str, movie_id: int) -> dict:
         raise DomainError("Цього фільму немає в колоді")
     repo.update_meta(meta["code"], {"status": "done", "chosenId": movie_id, "chosenAt": repo.now()})
     return state(user, meta["code"])
+
+
+# ── friends: invites and hopping into a friend's room ────────────────────────
+
+
+def invite(user: CurrentUser, code: str, user_ids: list[str]) -> dict:
+    """Any member can call their friends in. Only real friends (shared a room before) can be invited."""
+    meta, members = _load(code)
+    me = _require_member(user, members)
+    if meta["status"] == "done":
+        raise Conflict("Ця кімната вже обрала фільм")
+    friends = set(users.friend_ids(user.id))
+    inside = {m["userId"] for m in members}
+    wanted = list(dict.fromkeys(user_ids))[:MAX_INVITES_PER_CALL]
+    if any(u not in friends for u in wanted):
+        raise Forbidden("Запрошувати можна лише друзів")
+    sent = [u for u in wanted if u not in inside]
+    for friend in sent:
+        repo.put_invite(
+            friend,
+            {"code": meta["code"], "fromId": user.id, "fromName": me["name"], "fromMascot": me.get("mascot"), "at": repo.now()},
+        )
+    return {"invited": sent}
+
+
+def dismiss_invite(user: CurrentUser, code: str) -> None:
+    repo.delete_invite(user.id, logic.normalize_code(code))
+
+
+def live(user: CurrentUser) -> dict:
+    """What is happening around me right now: invites I got and rooms my friends are sitting in."""
+    invites = repo.list_invites(user.id)
+    friend_ids = users.friend_ids(user.id)
+    presences = repo.get_presences([*friend_ids, user.id])
+    mine = presences.pop(user.id, {}).get("code")
+
+    metas = repo.get_metas([i["code"] for i in invites] + [p["code"] for p in presences.values()])
+    open_codes = {c for c, m in metas.items() if m.get("status") != "done"}
+
+    by_room: dict[str, list[str]] = {}
+    for friend_id, p in presences.items():
+        if p["code"] in open_codes:
+            by_room.setdefault(p["code"], []).append(friend_id)
+    profiles = users.get_profiles([f for ids in by_room.values() for f in ids])
+
+    def room_info(c: str) -> dict:
+        m = metas[c]
+        return {"code": c, "status": m["status"], "hostName": m.get("hostName"), "joined": c == mine}
+
+    friend_rooms = [
+        {**room_info(c), "friends": [users.public(profiles[f]) for f in ids if f in profiles]}
+        for c, ids in by_room.items()
+    ]
+    friend_rooms.sort(key=lambda r: (r["joined"], r["status"] != "lobby"))
+    return {
+        "invites": [
+            {**room_info(i["code"]), "from": {"id": i["fromId"], "name": i["fromName"], "mascot": i.get("fromMascot")}, "at": i["at"]}
+            for i in sorted(invites, key=lambda i: i["at"], reverse=True)
+            if i["code"] in open_codes and i["code"] != mine
+        ],
+        "friendRooms": [r for r in friend_rooms if r["friends"]],
+    }

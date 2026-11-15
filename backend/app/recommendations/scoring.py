@@ -3,7 +3,8 @@
 The idea: a film is a good pick for a group when
   1. nobody in the room has seen it — unless everyone who saw it is happy to rewatch,
   2. TMDB recommends it for films people in the room rated highly (seed hits; more members = better),
-  3. it is in the genres the group watches most (and the ones picked for tonight),
+  3. it covers the genres *every* member picked for tonight (comedy from Anna + horror from Bohdan
+     → a horror-comedy beats a plain comedy), and the genres the group watches most,
   4. it is well rated and reasonably popular.
 Every score comes with human-readable reasons that the card shows.
 """
@@ -28,23 +29,82 @@ class Member:
 
 @dataclass
 class Filters:
-    genres: list[int] = field(default_factory=list)
+    genre_picks: list[list[int]] = field(default_factory=list)  # one list per member who picked genres
     max_runtime: int | None = None
-    year_from: int | None = None
-    year_to: int | None = None
+    year_ranges: list[tuple[int | None, int | None]] = field(default_factory=list)  # one per member who picked an era
     include_rewatch: bool = True
     min_votes: int = 150
+
+    @property
+    def genres(self) -> list[int]:
+        """Every genre anybody picked."""
+        return sorted({g for pick in self.genre_picks for g in pick})
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "Filters":
         d = d or {}
+        picks = [[int(g) for g in p] for p in d.get("genrePicks") or [] if p]
+        if not picks and d.get("genres"):  # older rooms: one shared genre list
+            picks = [[int(g) for g in d["genres"]]]
+        ranges = [(r[0], r[1]) for r in d.get("yearRanges") or []]
+        if not ranges and (d.get("yearFrom") or d.get("yearTo")):
+            ranges = [(d.get("yearFrom") or None, d.get("yearTo") or None)]
         return cls(
-            genres=[int(g) for g in d.get("genres") or []],
+            genre_picks=picks,
             max_runtime=d.get("maxRuntime") or None,
-            year_from=d.get("yearFrom") or None,
-            year_to=d.get("yearTo") or None,
+            year_ranges=ranges,
             include_rewatch=bool(d.get("includeRewatch", True)),
         )
+
+
+def genre_coverage(genre_ids: list[int], picks: list[list[int]]) -> int:
+    """How many members' genre picks this film satisfies."""
+    have = set(genre_ids or [])
+    return sum(1 for pick in picks if have & set(pick))
+
+
+def year_fits(year: int | None, r: tuple[int | None, int | None]) -> bool:
+    lo, hi = r
+    return year is not None and (lo is None or year >= lo) and (hi is None or year <= hi)
+
+
+def genre_combos(picks: list[list[int]], limit: int = 3) -> list[list[int]]:
+    """Genre sets to request with AND, so the candidate pool contains films that mix everyone's picks.
+
+    First the smallest set that touches every member's pick (greedy set cover), then the most
+    popular cross-member pairs. Single genres are left to the OR query.
+    """
+    if len(picks) < 2:
+        return []
+    freq: dict[int, int] = defaultdict(int)
+    for pick in picks:
+        for g in set(pick):
+            freq[g] += 1
+
+    combos: list[list[int]] = []
+    uncovered = list(range(len(picks)))
+    cover: list[int] = []
+    while uncovered and len(cover) < 3:
+        best = max(freq, key=lambda g: (sum(1 for i in uncovered if g in picks[i]), freq[g], -g))
+        cover.append(best)
+        uncovered = [i for i in uncovered if best not in picks[i]]
+    if len(cover) >= 2:
+        combos.append(sorted(cover))
+
+    pairs: dict[tuple[int, int], int] = {}
+    for i in range(len(picks)):
+        for j in range(i + 1, len(picks)):
+            for a in picks[i]:
+                for b in picks[j]:
+                    if a != b:
+                        key = (min(a, b), max(a, b))
+                        pairs[key] = freq[a] + freq[b]
+    for pair in sorted(pairs, key=lambda k: (-pairs[k], k)):
+        if len(combos) >= limit:
+            break
+        if list(pair) not in combos and not set(pair) <= set(combos[0] if combos else []):
+            combos.append(list(pair))
+    return combos[:limit]
 
 
 @dataclass
@@ -118,12 +178,9 @@ def pick_seeds(members: list[Member], filters: Filters, per_member: int = 4, cap
 
 
 def passes_filters(movie: dict, filters: Filters) -> bool:
-    if filters.genres and not set(filters.genres) & set(movie.get("genreIds") or []):
-        return False
-    year = movie.get("year")
-    if filters.year_from and (not year or year < filters.year_from):
-        return False
-    if filters.year_to and (not year or year > filters.year_to):
+    if filters.genre_picks and not genre_coverage(movie.get("genreIds") or [], filters.genre_picks):
+        return False  # matches nobody's mood
+    if filters.year_ranges and not any(year_fits(movie.get("year"), r) for r in filters.year_ranges):
         return False
     runtime = movie.get("runtime")
     if runtime and runtime < MIN_RUNTIME:
@@ -154,8 +211,25 @@ def score(c: Candidate, members_count: int, prefs: dict[int, float], filters: Fi
         if prefs.get(best, 0) >= 0.6 and best in genre_names:
             reasons.append(f"Улюблений жанр компанії — {genre_names[best].lower()}")
 
-    if filters.genres and set(filters.genres) & set(genre_ids):
-        s += 0.5
+    picks = filters.genre_picks
+    mood_reason = None
+    if picks:
+        covered = genre_coverage(genre_ids, picks)
+        s += 2.4 * covered / len(picks)
+        if len(picks) > 1 and covered == len(picks):
+            s += 0.6
+            in_pick_order = dict.fromkeys(g for pick in picks for g in pick)
+            names = [genre_names[g].lower() for g in in_pick_order if g in genre_ids and g in genre_names][:3]
+            if len(names) > 1:
+                mood_reason = f"Під настрій усіх: {' + '.join(names)}"
+            elif names:
+                mood_reason = f"{names[0].capitalize()} — хочуть усі"
+            else:
+                mood_reason = "Під настрій усіх учасників"
+
+    if filters.year_ranges:
+        fits = sum(1 for r in filters.year_ranges if year_fits(m.get("year"), r))
+        s += 0.5 * fits / len(filters.year_ranges)
 
     rating = float(m.get("rating") or 0)
     votes = int(m.get("votes") or 0)
@@ -166,6 +240,8 @@ def score(c: Candidate, members_count: int, prefs: dict[int, float], filters: Fi
 
     s += 0.6 * min(1.0, math.log10(float(m.get("popularity") or 0) + 1) / 3)
 
+    if mood_reason:
+        reasons.insert(0, mood_reason)
     if c.rewatch_by:
         s += 0.3
         reasons.insert(0, f"{', '.join(c.rewatch_by)} — готові передивитись")
