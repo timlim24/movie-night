@@ -1,0 +1,33 @@
+[importlinter]
+root_package = app
+
+# Modules talk to each other only through their api.py.
+[importlinter:contract:modules]
+name = Modules are independent except through api.py
+type = independence
+modules =
+    app.users
+    app.movies
+    app.library
+    app.rooms
+    app.recommendations
+ignore_imports =
+    app.*.service -> app.*.api
+    app.rooms.service -> app.library.api
+    app.rooms.service -> app.recommendations.api
+    app.rooms.service -> app.users.api
+    app.library.service -> app.movies.api
+    app.recommendations.service -> app.movies.api
+
+# Layers inside a module: router → service → repository.
+[importlinter:contract:layers]
+name = Router -> service -> repository
+type = layers
+containers =
+    app.users
+    app.library
+    app.rooms
+layers =
+    router
+    service
+    repository

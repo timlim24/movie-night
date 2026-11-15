@@ -1,0 +1,28 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# terraform
+infra/.terraform/
+infra/*.tfstate*
+infra/tfplan
+.build/
+
+# backend
+backend/.venv/
+backend/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+
+# misc
+.DS_Store
+
+# course materials (not ours to publish)
+presentation/
+frontend/*.tsbuildinfo
