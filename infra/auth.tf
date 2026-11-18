@@ -1,7 +1,10 @@
 # Authentication is bought, not built: Cognito user pool + managed login pages.
 locals {
   google_enabled = var.google_client_id != ""
-  app_url        = "https://${aws_cloudfront_distribution.web.domain_name}"
+  cloudfront_url = "https://${aws_cloudfront_distribution.web.domain_name}"
+  app_url        = var.domain_name != "" ? "https://${var.domain_name}" : local.cloudfront_url
+  extra_urls     = [for u in split(",", var.extra_app_urls) : trimsuffix(trimspace(u), "/") if trimspace(u) != ""]
+  app_urls       = distinct(concat([local.app_url, local.cloudfront_url], local.extra_urls))
 }
 
 resource "aws_cognito_user_pool" "main" {
@@ -88,8 +91,9 @@ resource "aws_cognito_user_pool_client" "web" {
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
   supported_identity_providers         = concat(["COGNITO"], local.google_enabled ? ["Google"] : [])
 
-  callback_urls = ["${local.app_url}/auth/callback", "http://localhost:5173/auth/callback"]
-  logout_urls   = ["${local.app_url}/", "http://localhost:5173/"]
+  # The cloudfront.net address keeps working after a custom domain is added.
+  callback_urls = distinct(concat([for u in local.app_urls : "${u}/auth/callback"], ["http://localhost:5173/auth/callback"]))
+  logout_urls   = distinct(concat([for u in local.app_urls : "${u}/"], ["http://localhost:5173/"]))
 
   explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
   prevent_user_existence_errors = "ENABLED"

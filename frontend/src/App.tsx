@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { Background, Curtain } from './components/Atmosphere'
+import { Background } from './components/Atmosphere'
 import { api, type Profile } from './lib/api'
 import { AuthProvider, useAuth } from './lib/auth'
 import { ToastProvider } from './lib/toast'
@@ -72,7 +72,6 @@ function Shell() {
   return (
     <>
       <Background />
-      <Curtain key={location.pathname} />
       <main className={`page ${showNav ? 'with-nav' : ''}`}>
         <Routes location={location}>
           <Route path="/" element={signedIn ? <Home /> : <Landing />} />

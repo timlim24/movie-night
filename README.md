@@ -7,7 +7,7 @@ Movie Night — вебзастосунок для компанії друзів,
 учасників (і без фільмів, які хтось уже бачив). Щойно фільм сподобався всім — «ЗБІГ!», конфеті, сеанс.
 Якщо ідеального збігу немає, показуємо фільми, які сподобались хоча б комусь.
 
-**Демо:** https://d2nvw32wp3gy8d.cloudfront.net
+**Демо:** https://movienight-ucu.pages.dev (те саме напряму з AWS: https://d2nvw32wp3gy8d.cloudfront.net)
 
 ## Що вміє
 
@@ -49,6 +49,7 @@ flowchart LR
 - **Lambda + DynamoDB, а не ECS + RDS.** Бюджет майже нульовий. Lambda з RDS мусила б жити у VPC, а виходити звідти до TMDB довелося б через NAT Gateway (~$32/міс). DynamoDB on-demand коштує $0, коли застосунком ніхто не користується.
 - **Автентифікацію купуємо, а не пишемо.** Підпис токена перевіряє API Gateway ще до запуску Lambda. Lambda лише читає claims і перевіряє права: хто ведучий, хто учасник кімнати.
 - **Опитування сервера раз на 2 с замість WebSocket.** Для кімнат на 2–12 людей цього досить, і так значно простіше.
+- **Читабельна адреса безкоштовно.** `movienight-ucu.pages.dev` — це 8-рядковий проксі на Cloudflare Pages (`infra/pages-proxy/`), який пересилає кожен запит у наш CloudFront. Сайт, API й дані лишаються на AWS. Якщо з'явиться власний домен — `DOMAIN_NAME` у `.env`, і Terraform налаштує сертифікат, CloudFront і DNS (`infra/domain.tf`).
 - **Уся інфраструктура описана в Terraform** (`infra/`), стан лежить у віддаленому S3 з блокуванням.
 
 ## Структура репозиторію
@@ -68,7 +69,7 @@ frontend/   React + TypeScript + Vite + Framer Motion
   src/components/      маскоти (SVG), колода свайпів, квиток з QR, атмосфера (завіса, зерно, промінь)
   src/pages/           лендінг, зал, фільмотека, друзі, профіль, кімната
 infra/      Terraform: Cognito, DynamoDB, Lambda, API Gateway, S3, CloudFront, SSM, Budget
-scripts/    deploy.sh — повний деплой; deploy-frontend.sh — лише фронтенд; e2e.py — наскрізна перевірка
+scripts/    deploy.sh — повний деплой; deploy-frontend.sh — лише фронтенд; deploy-pages-proxy.sh — адреса *.pages.dev; e2e.py — наскрізна перевірка
 docs/       архітектура
 ```
 

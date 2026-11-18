@@ -27,6 +27,7 @@ export type MovieCard = MovieSummary & {
   cast: string[]
   reasons?: string[]
   rewatchBy?: string[]
+  proposedBy?: string[]
 }
 
 export type LibraryItem = {
@@ -48,10 +49,20 @@ export type LibraryItem = {
 export type Settings = { includeRewatch: boolean }
 
 export type Era = 'classic' | 'modern' | 'new'
-export type Prefs = { genres: number[]; maxRuntime: number | null; era: Era | null }
-export const EMPTY_PREFS: Prefs = { genres: [], maxRuntime: null, era: null }
+/** genres = "хочу" (≤3), veto = "точно ні" (≤3), eras = eras I'm fine with (empty = any). */
+export type Prefs = { genres: number[]; veto: number[]; maxRuntime: number | null; eras: Era[] }
+export const EMPTY_PREFS: Prefs = { genres: [], veto: [], maxRuntime: null, eras: [] }
 
-export type Combined = { genrePicks: number[][]; maxRuntime: number | null; eras: Era[]; includeRewatch: boolean }
+export type Combined = {
+  genrePicks: number[][]
+  vetoed: number[]
+  maxRuntime: number | null
+  eras: Era[]
+  erasConflict: boolean
+  includeRewatch: boolean
+}
+
+export type Proposal = { id: number; title: string; year: number | null; poster: string | null }
 
 export type RoomMember = {
   userId: string
@@ -62,7 +73,8 @@ export type RoomMember = {
   progress: number
   likes: number
   lastVote?: { movieId: number; like: boolean; at: string } | null
-  prefs?: Partial<Prefs>
+  prefs?: Partial<Prefs> & { era?: Era | null }
+  proposals?: Proposal[]
 }
 
 export type ResultRow = { movieId: number; likes: string[]; dislikes: string[]; rating: number }
@@ -152,6 +164,8 @@ export const api = {
   joinRoom: (code: string) => request<RoomState>('POST', `/rooms/${code}/join`),
   setSettings: (code: string, settings: Settings) => request<RoomState>('PUT', `/rooms/${code}/filters`, settings),
   setPrefs: (code: string, prefs: Prefs) => request<RoomState>('PUT', `/rooms/${code}/prefs`, prefs),
+  propose: (code: string, movieId: number) => request<RoomState>('POST', `/rooms/${code}/proposals`, { movieId }),
+  unpropose: (code: string, movieId: number) => request<RoomState>('DELETE', `/rooms/${code}/proposals/${movieId}`),
   invite: (code: string, userIds: string[]) => request<{ invited: string[] }>('POST', `/rooms/${code}/invite`, { userIds }),
   dismissInvite: (code: string) => request<void>('DELETE', `/rooms/${code}/invite`),
   setRoomMascot: (code: string, mascot: MascotId) => request<RoomState>('POST', `/rooms/${code}/mascot`, { mascot }),

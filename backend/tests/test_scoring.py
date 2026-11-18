@@ -119,3 +119,21 @@ def test_genre_combos_cover_every_member():
 def test_legacy_room_filters_still_load():
     f = Filters.from_dict({"genres": [COMEDY], "yearFrom": 2000})
     assert f.genre_picks == [[COMEDY]] and f.year_ranges == [(2000, None)]
+
+
+def test_vetoed_genre_never_passes():
+    f = Filters(genre_picks=[[COMEDY]], vetoed=[HORROR])
+    assert passes_filters(movie(1, [COMEDY]), f)
+    assert not passes_filters(movie(2, [COMEDY, HORROR]), f)
+
+
+def test_coverage_outranks_a_great_score():
+    f = Filters(genre_picks=[[COMEDY], [DRAMA]])
+    names = {COMEDY: "Комедія", DRAMA: "Драма"}
+    everyone = score(Candidate(movie(1, [COMEDY, DRAMA], rating=6.0, votes=200, popularity=1)), 2, {}, f, names)
+    half = score(
+        Candidate(movie(2, [COMEDY], rating=9.0, votes=9000, popularity=900), seed_hits=[("a", "Анна", "X"), ("b", "Богдан", "Y")]),
+        2, {COMEDY: 1.0}, f, names,
+    )
+    assert half.score > everyone.score  # on raw score the half-match would win…
+    assert rank([half, everyone], rng=random.Random(0))[0] is everyone  # …but full coverage goes first

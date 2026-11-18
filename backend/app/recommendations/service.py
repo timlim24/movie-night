@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 from app.movies import api as movies
 from app.recommendations.scoring import (
     Candidate,
@@ -24,6 +26,8 @@ MAX_REWATCH_CARDS = 3
 
 def _discover_queries(filters: Filters, prefs: dict[int, float]) -> list[dict]:
     base: dict = {"vote_count.gte": filters.min_votes}
+    if filters.vetoed:
+        base["without_genres"] = "|".join(map(str, filters.vetoed))
     if filters.max_runtime:
         base["with_runtime.lte"] = filters.max_runtime
     if filters.year_ranges:
@@ -57,9 +61,38 @@ def _discover_queries(filters: Filters, prefs: dict[int, float]) -> list[dict]:
     return queries
 
 
-def build_deck(members: list[Member], filters: Filters, exclude: set[int] | None = None, size: int = 20) -> list[dict]:
+def _pinned_cards(pinned: list[dict]) -> list[dict]:
+    """Films members proposed themselves: always in the deck, whatever the filters say."""
+    cards = movies.parallel(lambda p: movies.details(p["id"]), pinned)
+    return [
+        {**card, "reasons": [f"Пропонує {', '.join(p['by'])}"], "rewatchBy": [], "proposedBy": p["by"]}
+        for p, card in zip(pinned, cards)
+        if card
+    ]
+
+
+def build_deck(
+    members: list[Member], filters: Filters, exclude: set[int] | None = None, size: int = 20, pinned: list[dict] | None = None
+) -> list[dict]:
+    """20 cards: members' own proposals mixed into the top of the deck, the rest recommended."""
+    own = _pinned_cards(pinned or [])
+    exclude = set(exclude or ()) | {c["id"] for c in own}
+    try:
+        recommended = _recommend(members, filters, exclude, max(size - len(own), 8))
+    except DomainError:
+        if not own:
+            raise
+        recommended = []
+    deck = list(recommended)
+    rng = random.Random()
+    for card in own:  # spread proposals over the first part of the deck instead of stacking them
+        deck.insert(rng.randint(0, min(len(deck), 2 * len(own) + 2)), card)
+    return deck
+
+
+def _recommend(members: list[Member], filters: Filters, exclude: set[int], size: int) -> list[dict]:
     index = watched_index(members)
-    banned = excluded_ids(index, filters.include_rewatch) | set(exclude or ())
+    banned = excluded_ids(index, filters.include_rewatch) | exclude
     prefs = genre_preferences(members)
     seeds = pick_seeds(members, filters)
 
@@ -89,7 +122,7 @@ def build_deck(members: list[Member], filters: Filters, exclude: set[int] | None
     if filters.include_rewatch:
         rewatch = rewatchable(index)
         for mid, names in list(rewatch.items()):
-            if mid in (exclude or set()):
+            if mid in exclude:
                 continue
             item = next(i for m in members for i in m.library if i["movieId"] == mid)
             movie = {"id": mid, "genreIds": item.get("genreIds"), "year": item.get("year"), "poster": item.get("poster"),

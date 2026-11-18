@@ -25,7 +25,11 @@ function CardFace({ card, flipped }: { card: MovieCard; flipped: boolean }) {
           <p className="card-meta">
             {[card.year, card.genres.slice(0, 3).join(' · ')].filter(Boolean).join(' — ')}
           </p>
-          {card.reasons && card.reasons[0] && <p className="card-reason">✦ {card.reasons[0]}</p>}
+          {card.proposedBy?.length ? (
+            <p className="card-proposed">💡 Пропонує {card.proposedBy.join(', ')}</p>
+          ) : (
+            card.reasons && card.reasons[0] && <p className="card-reason">✦ {card.reasons[0]}</p>
+          )}
         </div>
       </div>
       <div className="card-back">

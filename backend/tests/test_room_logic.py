@@ -44,13 +44,18 @@ def test_everyone_done():
     assert logic.everyone_done(IDS, [a])
 
 
-def with_prefs(uid, genres=(), runtime=None, era=None):
-    return {"userId": uid, "prefs": {"genres": list(genres), "maxRuntime": runtime, "era": era}}
+def with_prefs(uid, genres=(), runtime=None, eras=(), veto=()):
+    return {"userId": uid, "name": uid.upper(), "prefs": {"genres": list(genres), "veto": list(veto), "maxRuntime": runtime, "eras": list(eras)}}
 
 
-def test_clean_prefs_limits_genres_and_validates():
-    assert logic.clean_prefs({"genres": [35, 35, 27]}) == {"genres": [35, 27], "maxRuntime": None, "era": None}
-    for bad in ({"genres": [1, 2, 3, 4]}, {"maxRuntime": 30}, {"era": "future"}):
+def test_alone_in_a_room_there_are_no_matches():
+    assert logic.matches(IDS, [member("a", {1: True, 2: True})]) == []
+
+
+def test_clean_prefs_limits_and_validates():
+    assert logic.clean_prefs({"genres": [35, 35, 27], "veto": [27, 18]}) == {"genres": [35, 27], "veto": [18], "maxRuntime": None, "eras": []}
+    assert logic.clean_prefs({"era": "new"})["eras"] == ["new"]  # old single-era shape still accepted
+    for bad in ({"genres": [1, 2, 3, 4]}, {"veto": [1, 2, 3, 4]}, {"maxRuntime": 30}, {"eras": ["future"]}):
         try:
             logic.clean_prefs(bad)
         except ValueError:
@@ -58,16 +63,38 @@ def test_clean_prefs_limits_genres_and_validates():
         raise AssertionError(f"accepted {bad}")
 
 
-def test_combine_keeps_picks_per_person_strictest_runtime_and_era_union():
-    room = [with_prefs("a", [35], 150, "new"), with_prefs("b", [27, 53], 120, "classic"), with_prefs("c")]
-    c = logic.combine(room, include_rewatch=False)
-    assert c["genrePicks"] == [[35], [27, 53]]  # "c" picked nothing and does not constrain
-    assert c["maxRuntime"] == 120
-    assert c["eras"] == ["classic", "new"]
-    assert c["yearRanges"] == [[2010, None], [None, 1989]]
-    assert c["includeRewatch"] is False
+def test_veto_beats_someone_elses_wish():
+    room = [with_prefs("a", [27, 35]), with_prefs("b", [10749], veto=[27])]
+    c = logic.combine(room)
+    assert c["vetoed"] == [27]
+    assert c["genrePicks"] == [[35], [10749]]
+    only_horror = logic.combine([with_prefs("a", [27]), with_prefs("b", veto=[27])])
+    assert only_horror["genrePicks"] == []  # nothing left of a's wish — a no longer constrains
 
 
-def test_combine_with_no_prefs_is_open():
+def test_eras_take_the_overlap_or_fall_back_to_union():
+    c = logic.combine([with_prefs("a", eras=["modern", "new"]), with_prefs("b", eras=["new"]), with_prefs("c")])
+    assert c["eras"] == ["new"] and not c["erasConflict"] and c["yearRanges"] == [[2010, None]]
+    c = logic.combine([with_prefs("a", eras=["classic"]), with_prefs("b", eras=["new"])])
+    assert c["eras"] == ["classic", "new"] and c["erasConflict"]
+
+
+def test_strictest_runtime_and_open_room():
+    assert logic.combine([with_prefs("a", runtime=150), with_prefs("b", runtime=120)])["maxRuntime"] == 120
     c = logic.combine([{"userId": "a"}])
-    assert c["genrePicks"] == [] and c["maxRuntime"] is None and c["yearRanges"] == []
+    assert c["genrePicks"] == [] and c["maxRuntime"] is None and c["yearRanges"] == [] and c["vetoed"] == []
+
+
+def test_proposals():
+    card = {"id": 7, "title": "Film", "year": 2000, "poster": "p", "overview": "x"}
+    props = logic.add_proposal([], card, seen=set())
+    assert props == [{"id": 7, "title": "Film", "year": 2000, "poster": "p"}]
+    assert logic.add_proposal(props, card, seen=set()) == props  # idempotent
+    for proposals, seen in (([], {7}), ([{"id": i} for i in range(3)], set())):
+        try:
+            logic.add_proposal(proposals, card, seen)
+        except ValueError:
+            continue
+        raise AssertionError("accepted")
+    members = [{"name": "Анна К", "proposals": [{"id": 7}, {"id": 8}]}, {"name": "Богдан", "proposals": [{"id": 7}]}]
+    assert logic.pinned(members, seen={8}) == [{"id": 7, "by": ["Анна", "Богдан"]}]

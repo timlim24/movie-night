@@ -14,6 +14,8 @@ export TF_VAR_google_client_id="${GOOGLE_CLIENT_ID:-}"
 export TF_VAR_google_client_secret="${GOOGLE_CLIENT_SECRET:-}"
 export TF_VAR_alert_email="${ALERT_EMAIL:-}"
 export TF_VAR_donate_url="${DONATE_URL:-}"
+export TF_VAR_domain_name="${DOMAIN_NAME:-}"
+export TF_VAR_extra_app_urls="${EXTRA_APP_URLS:-}"
 
 echo "▶ backend"
 backend/build.sh

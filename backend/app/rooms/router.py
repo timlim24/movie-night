@@ -13,8 +13,13 @@ class Settings(BaseModel):
 
 class Prefs(BaseModel):
     genres: list[int] = []
+    veto: list[int] = []
     maxRuntime: int | None = None
-    era: str | None = None
+    eras: list[str] = []
+
+
+class ProposeBody(BaseModel):
+    movieId: int
 
 
 class CreateBody(BaseModel):
@@ -102,3 +107,13 @@ def vote(code: str, body: VoteBody, user: CurrentUser = Depends(current_user)) -
 @router.post("/{code}/choose")
 def choose(code: str, body: ChooseBody, user: CurrentUser = Depends(current_user)) -> dict:
     return service.choose(user, code, body.movieId)
+
+
+@router.post("/{code}/proposals")
+def propose(code: str, body: ProposeBody, user: CurrentUser = Depends(current_user)) -> dict:
+    return service.propose(user, code, body.movieId)
+
+
+@router.delete("/{code}/proposals/{movie_id}")
+def unpropose(code: str, movie_id: int, user: CurrentUser = Depends(current_user)) -> dict:
+    return service.unpropose(user, code, movie_id)

@@ -89,11 +89,14 @@ check(bohdan.post(f"/api/rooms/{code}/join"), "join")
 live = check(bohdan.get("/api/rooms/live"), "invite gone after joining")
 assert not any(i["code"] == code for i in live["invites"]), live
 
-COMEDY, HORROR, ANIMATION = 35, 27, 16
-check(anna.put(f"/api/rooms/{code}/prefs", json={"genres": [COMEDY, ANIMATION], "maxRuntime": 150, "era": None}), "anna prefs")
-st = check(bohdan.put(f"/api/rooms/{code}/prefs", json={"genres": [HORROR, COMEDY], "maxRuntime": 120, "era": "new"}), "bohdan prefs")
+COMEDY, HORROR, ANIMATION, ROMANCE = 35, 27, 16, 10749
+check(anna.put(f"/api/rooms/{code}/prefs", json={"genres": [COMEDY, ANIMATION], "veto": [HORROR], "maxRuntime": 150, "eras": ["modern", "new"]}), "anna prefs (with veto)")
+st = check(bohdan.put(f"/api/rooms/{code}/prefs", json={"genres": [HORROR, COMEDY], "maxRuntime": 120, "eras": ["new"]}), "bohdan prefs")
 print("    combined:", st["combined"])
-assert st["combined"]["maxRuntime"] == 120 and st["combined"]["eras"] == ["new"]
+c = st["combined"]
+assert c["maxRuntime"] == 120 and c["eras"] == ["new"] and c["vetoed"] == [HORROR] and [COMEDY] in c["genrePicks"], c
+prop = check(bohdan.post(f"/api/rooms/{code}/proposals", json={"movieId": 120467}), "propose own film")  # Grand Budapest Hotel
+assert any(p["id"] == 120467 for m in prop["members"] for p in m["proposals"])
 r = bohdan.put(f"/api/rooms/{code}/prefs", json={"genres": [1, 2, 3, 4]})
 print(f"{'✓' if r.status_code == 400 else '✗'} max 3 genres: {r.status_code}")
 r = bohdan.post(f"/api/rooms/{code}/start")
@@ -101,9 +104,15 @@ print(f"{'✓' if r.status_code == 403 else '✗'} non-host cannot start: {r.sta
 started = check(anna.post(f"/api/rooms/{code}/start"), "start (deck build)")
 deck = started["deck"]
 print(f"    deck: {len(deck)} films, first: {deck[0]['title']} — {deck[0]['reasons']}")
+assert any(c["id"] == 120467 and c.get("proposedBy") for c in deck), "proposal missing from deck"
 for card in deck:
-    assert set(card["genreIds"]) & {COMEDY, ANIMATION} or set(card["genreIds"]) & {HORROR, COMEDY}, card["title"]
+    if card.get("proposedBy"):
+        continue  # proposals skip the filters on purpose
+    assert HORROR not in card["genreIds"], ("vetoed genre", card["title"])
+    assert COMEDY in card["genreIds"] or ANIMATION in card["genreIds"], card["title"]
     assert card["year"] >= 2010 and (card["runtime"] or 0) <= 120, (card["title"], card["year"], card["runtime"])
+st = check(anna.get(f"/api/rooms/{code}", params={"deck": 0}), "proposals used up after start")
+assert not any(m["proposals"] for m in st["members"])
 both = [c["title"] for c in deck if COMEDY in c["genreIds"]]
 print(f"    comedies (both picked it): {len(both)}/{len(deck)}; top 5: {[c['title'] for c in deck[:5]]}")
 for i, card in enumerate(deck):
@@ -113,6 +122,10 @@ st = check(anna.get(f"/api/rooms/{code}", params={"deck": 0}), "state after vote
 print(f"    matches={st['matches'][:5]} results={len(st['results'])} everyoneDone={st['everyoneDone']}")
 done = check(anna.post(f"/api/rooms/{code}/choose", json={"movieId": st["results"][0]["movieId"]}), "choose")
 print("    tonight:", done["chosen"]["title"])
+solo = check(anna.post("/api/rooms", json={}), "solo room")
+deck = check(anna.post(f"/api/rooms/{solo['code']}/start"), "solo start")["deck"]
+st = check(anna.post(f"/api/rooms/{solo['code']}/votes", json={"movieId": deck[0]["id"], "like": True}), "solo like")
+assert st["matches"] == [], "a solo like must not be a match"
 friends = check(bohdan.get("/api/friends"), "friends")
 print("   ", [f["name"] for f in friends])
 print("ALL GOOD")

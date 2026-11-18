@@ -3,8 +3,9 @@
 The idea: a film is a good pick for a group when
   1. nobody in the room has seen it — unless everyone who saw it is happy to rewatch,
   2. TMDB recommends it for films people in the room rated highly (seed hits; more members = better),
-  3. it covers the genres *every* member picked for tonight (comedy from Anna + horror from Bohdan
-     → a horror-comedy beats a plain comedy), and the genres the group watches most,
+  3. it has no genre anybody vetoed, and it covers the genres *every* member wants tonight
+     (comedy from Anna + horror from Bohdan → a horror-comedy). Coverage is the primary sort key:
+     a film half the room is in the mood for never outranks one the whole room is,
   4. it is well rated and reasonably popular.
 Every score comes with human-readable reasons that the card shows.
 """
@@ -31,8 +32,9 @@ class Member:
 class Filters:
     genre_picks: list[list[int]] = field(default_factory=list)  # one list per member who picked genres
     max_runtime: int | None = None
-    year_ranges: list[tuple[int | None, int | None]] = field(default_factory=list)  # one per member who picked an era
+    year_ranges: list[tuple[int | None, int | None]] = field(default_factory=list)  # any of these is fine
     include_rewatch: bool = True
+    vetoed: list[int] = field(default_factory=list)  # a film with any of these genres is never suggested
     min_votes: int = 150
 
     @property
@@ -54,6 +56,7 @@ class Filters:
             max_runtime=d.get("maxRuntime") or None,
             year_ranges=ranges,
             include_rewatch=bool(d.get("includeRewatch", True)),
+            vetoed=[int(g) for g in d.get("vetoed") or []],
         )
 
 
@@ -113,6 +116,7 @@ class Candidate:
     seed_hits: list[tuple[str, str, str]] = field(default_factory=list)  # (user_id, member name, seed title)
     rewatch_by: list[str] = field(default_factory=list)
     score: float = 0.0
+    coverage: float = 0.0  # share of members whose wished genres this film has (1.0 when nobody picked)
     reasons: list[str] = field(default_factory=list)
 
 
@@ -178,6 +182,8 @@ def pick_seeds(members: list[Member], filters: Filters, per_member: int = 4, cap
 
 
 def passes_filters(movie: dict, filters: Filters) -> bool:
+    if filters.vetoed and set(filters.vetoed) & set(movie.get("genreIds") or []):
+        return False  # somebody said "точно ні"
     if filters.genre_picks and not genre_coverage(movie.get("genreIds") or [], filters.genre_picks):
         return False  # matches nobody's mood
     if filters.year_ranges and not any(year_fits(movie.get("year"), r) for r in filters.year_ranges):
@@ -213,9 +219,11 @@ def score(c: Candidate, members_count: int, prefs: dict[int, float], filters: Fi
 
     picks = filters.genre_picks
     mood_reason = None
+    c.coverage = 1.0
     if picks:
         covered = genre_coverage(genre_ids, picks)
-        s += 2.4 * covered / len(picks)
+        c.coverage = covered / len(picks)
+        s += 2.4 * c.coverage
         if len(picks) > 1 and covered == len(picks):
             s += 0.6
             in_pick_order = dict.fromkeys(g for pick in picks for g in pick)
@@ -227,9 +235,6 @@ def score(c: Candidate, members_count: int, prefs: dict[int, float], filters: Fi
             else:
                 mood_reason = "Під настрій усіх учасників"
 
-    if filters.year_ranges:
-        fits = sum(1 for r in filters.year_ranges if year_fits(m.get("year"), r))
-        s += 0.5 * fits / len(filters.year_ranges)
 
     rating = float(m.get("rating") or 0)
     votes = int(m.get("votes") or 0)
@@ -252,6 +257,9 @@ def score(c: Candidate, members_count: int, prefs: dict[int, float], filters: Fi
 
 
 def rank(candidates: list[Candidate], rng: random.Random | None = None, jitter: float = 0.25) -> list[Candidate]:
-    """Highest score first; a little jitter so two rooms with the same people do not get identical decks."""
+    """Films that suit more of the room first, then by score.
+
+    A little jitter so two rooms with the same people do not get identical decks.
+    """
     rng = rng or random.Random()
-    return sorted(candidates, key=lambda c: c.score + rng.uniform(0, jitter), reverse=True)
+    return sorted(candidates, key=lambda c: (c.coverage, c.score + rng.uniform(0, jitter)), reverse=True)

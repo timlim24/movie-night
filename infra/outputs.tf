@@ -34,3 +34,7 @@ output "e2e_client_id" {
 output "table_name" {
   value = aws_dynamodb_table.main.name
 }
+
+output "cloudfront_url" {
+  value = local.cloudfront_url
+}

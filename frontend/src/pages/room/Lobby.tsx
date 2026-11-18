@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useAnimationControls } from 'framer-motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Mascot, type Mood } from '../../components/Mascot'
+import { Proposals } from '../../components/Proposals'
 import { Audience, RoomTicket } from '../../components/Room'
 import { Countdown, TicketButton, Toggle } from '../../components/Ui'
 import { api, ApiError, EMPTY_PREFS, MASCOTS, type Era, type Friend, type Genre, type Prefs, type RoomMember, type RoomState } from '../../lib/api'
@@ -18,8 +19,7 @@ const RUNTIMES: { label: string; value: number | null }[] = [
   { label: 'до 2,5 год', value: 150 },
 ]
 
-const ERAS: { label: string; short: string; value: Era | null }[] = [
-  { label: 'Будь-які', short: 'будь-які', value: null },
+const ERAS: { label: string; short: string; value: Era }[] = [
   { label: 'Класика · до 1990', short: 'класика', value: 'classic' },
   { label: '1990–2009', short: '1990–2009', value: 'modern' },
   { label: 'Нові · 2010+', short: 'нові', value: 'new' },
@@ -41,7 +41,15 @@ function useGenres() {
   return genres
 }
 
-const prefsOf = (m?: RoomMember): Prefs => ({ ...EMPTY_PREFS, ...(m?.prefs ?? {}) })
+const prefsOf = (m?: RoomMember): Prefs => {
+  const p = m?.prefs ?? {}
+  return {
+    genres: p.genres ?? [],
+    veto: p.veto ?? [],
+    maxRuntime: p.maxRuntime ?? null,
+    eras: p.eras ?? (p.era ? [p.era] : EMPTY_PREFS.eras),
+  }
+}
 const firstName = (name: string) => name.split(' ')[0]
 
 /** Smallest set of genres that touches every member's picks — what an ideal film would mix. */
@@ -64,23 +72,39 @@ function coverSet(picks: number[][]): number[] {
   return out
 }
 
+type ChipState = 'want' | 'veto' | null
+
 function MoodPanel({ room, meId, prefs, onChange }: { room: RoomState; meId?: string; prefs: Prefs; onChange: (p: Prefs) => void }) {
   const genres = useGenres()
-  const [full, setFull] = useState(false)
+  const [warn, setWarn] = useState<string | null>(null)
   const shake = useAnimationControls()
   const others = room.members.filter((m) => m.userId !== meId)
-  const pickedBy = (id: number) => others.filter((m) => prefsOf(m).genres.includes(id))
+  const wantedBy = (id: number) => others.filter((m) => prefsOf(m).genres.includes(id))
+  const vetoedBy = (id: number) => others.filter((m) => prefsOf(m).veto.includes(id))
+  const stateOf = (id: number): ChipState => (prefs.genres.includes(id) ? 'want' : prefs.veto.includes(id) ? 'veto' : null)
 
-  const toggleGenre = (id: number) => {
-    const on = prefs.genres.includes(id)
-    if (!on && prefs.genres.length >= MAX_GENRES) {
-      setFull(true)
-      shake.start({ x: [0, -8, 8, -5, 5, 0], transition: { duration: 0.4 } })
-      window.setTimeout(() => setFull(false), 1800)
-      return
-    }
-    onChange({ ...prefs, genres: on ? prefs.genres.filter((g) => g !== id) : [...prefs.genres, id] })
+  const bump = (msg: string) => {
+    setWarn(msg)
+    shake.start({ x: [0, -8, 8, -5, 5, 0], transition: { duration: 0.4 } })
+    window.setTimeout(() => setWarn(null), 1800)
   }
+
+  // Tap cycles: nothing → ♥ хочу → ✕ точно ні → nothing. A full list is skipped over.
+  const cycle = (id: number) => {
+    const genresNoId = prefs.genres.filter((g) => g !== id)
+    const vetoNoId = prefs.veto.filter((g) => g !== id)
+    const st = stateOf(id)
+    let next: ChipState = st === null ? 'want' : st === 'want' ? 'veto' : null
+    if (next === 'want' && prefs.genres.length >= MAX_GENRES) next = 'veto'
+    if (next === 'veto' && prefs.veto.length >= MAX_GENRES) {
+      if (st === null) return bump('максимум по 3')
+      next = null
+    }
+    onChange({ ...prefs, genres: next === 'want' ? [...genresNoId, id] : genresNoId, veto: next === 'veto' ? [...vetoNoId, id] : vetoNoId })
+  }
+
+  const toggleEra = (e: Era) =>
+    onChange({ ...prefs, eras: prefs.eras.includes(e) ? prefs.eras.filter((x) => x !== e) : ERAS.map((x) => x.value).filter((x) => x === e || prefs.eras.includes(x)) })
 
   return (
     <section className="panel mood">
@@ -89,33 +113,43 @@ function MoodPanel({ room, meId, prefs, onChange }: { room: RoomState; meId?: st
           <p className="eyebrow">твій настрій</p>
           <h3>Що хочеш сьогодні?</h3>
         </div>
-        <motion.div className={`mood-counter ${full ? 'full' : ''}`} animate={shake}>
-          {Array.from({ length: MAX_GENRES }, (_, i) => (
-            <motion.i key={i} className={i < prefs.genres.length ? 'on' : ''} animate={i < prefs.genres.length ? { scale: [1.5, 1] } : { scale: 1 }} />
-          ))}
-          <span>{full ? 'максимум 3' : `${prefs.genres.length}/${MAX_GENRES} жанри`}</span>
+        <motion.div className={`mood-counter ${warn ? 'full' : ''}`} animate={shake}>
+          {warn ?? (
+            <>
+              <b className="want">♥ {prefs.genres.length}/3</b>
+              <b className="veto">✕ {prefs.veto.length}/3</b>
+            </>
+          )}
         </motion.div>
       </div>
+      <p className="mood-hint">
+        Тап — <b className="want">♥ хочу</b>, ще тап — <b className="veto">✕ точно ні</b>, ще раз — скинути. Чуже «точно ні» прибирає жанр для всіх.
+      </p>
       <div className="chips">
         {genres.map((g) => {
-          const on = prefs.genres.includes(g.id)
-          const fans = pickedBy(g.id)
+          const st = stateOf(g.id)
+          const fans = wantedBy(g.id)
+          const haters = vetoedBy(g.id)
           return (
             <motion.button
               key={g.id}
               type="button"
-              className={`chip ${on ? 'on' : ''} ${fans.length ? 'shared' : ''} ${on && fans.length ? 'together' : ''}`}
+              className={`chip ${st === 'want' ? 'on' : ''} ${st === 'veto' ? 'veto' : ''} ${fans.length && st !== 'veto' ? 'shared' : ''} ${st === 'want' && fans.length ? 'together' : ''} ${haters.length ? 'banned' : ''}`}
               whileTap={{ scale: 0.88 }}
-              animate={on ? { scale: [1, 1.12, 1] } : { scale: 1 }}
-              onClick={() => toggleGenre(g.id)}
-              aria-pressed={on}
+              animate={st ? { scale: [1, 1.12, 1] } : { scale: 1 }}
+              onClick={() => cycle(g.id)}
+              aria-label={`${g.name}: ${st === 'want' ? 'хочу' : st === 'veto' ? 'точно ні' : 'без різниці'}`}
+              title={haters.length ? `Не хоче: ${haters.map((h) => h.name).join(', ')}` : undefined}
             >
-              <span>{g.name}</span>
-              {fans.length > 0 && (
-                <span className="chip-fans" title={fans.map((f) => f.name).join(', ')}>
+              {st === 'want' && <span className="chip-mark">♥</span>}
+              {st === 'veto' && <span className="chip-mark">✕</span>}
+              <span className="chip-label">{g.name}</span>
+              {(fans.length > 0 || haters.length > 0) && (
+                <span className="chip-fans">
                   {fans.slice(0, 3).map((f) => (
                     <Mascot key={f.userId} kind={f.mascot} size={18} />
                   ))}
+                  {haters.length > 0 && <span className="chip-ban">✕{haters.length > 1 ? haters.length : ''}</span>}
                 </span>
               )}
             </motion.button>
@@ -134,13 +168,12 @@ function MoodPanel({ room, meId, prefs, onChange }: { room: RoomState; meId?: st
         </div>
       </div>
       <div className="filter-row">
-        <span className="label">Епоха</span>
-        <div className="segmented">
+        <span className="label">Які роки тобі ок? {prefs.eras.length === 0 && <em className="muted">· будь-які</em>}</span>
+        <div className="chips eras">
           {ERAS.map((e) => (
-            <button key={e.label} type="button" className={prefs.era === e.value ? 'on' : ''} onClick={() => onChange({ ...prefs, era: e.value })}>
-              {prefs.era === e.value && <motion.span layoutId="seg-era" className="seg-pill" />}
-              <span>{e.label}</span>
-            </button>
+            <motion.button key={e.value} type="button" whileTap={{ scale: 0.9 }} className={`chip ${prefs.eras.includes(e.value) ? 'on' : ''}`} onClick={() => toggleEra(e.value)}>
+              {e.label}
+            </motion.button>
           ))}
         </div>
       </div>
@@ -151,16 +184,34 @@ function MoodPanel({ room, meId, prefs, onChange }: { room: RoomState; meId?: st
 function Together({ room, meId, myPrefs, onRewatch }: { room: RoomState; meId?: string; myPrefs: Prefs; onRewatch: (v: boolean) => void }) {
   const genres = useGenres()
   const name = (id: number) => genres.find((g) => g.id === id)?.name ?? '…'
-  // My own picks are shown from local state, so the summary reacts instantly.
+  const lower = (id: number) => name(id).toLowerCase()
+  // Mirrors rooms/logic.combine; my own picks come from local state so the summary reacts instantly.
   const members = room.members.map((m) => ({ ...m, p: m.userId === meId ? myPrefs : prefsOf(m) }))
-  const pickers = members.filter((m) => m.p.genres.length)
-  const cover = coverSet(pickers.map((m) => m.p.genres))
-  const runtimes = members.filter((m) => m.p.maxRuntime)
-  const strictest = runtimes.sort((a, b) => a.p.maxRuntime! - b.p.maxRuntime!)[0]
-  const eras = [...new Set(members.map((m) => m.p.era).filter(Boolean))] as Era[]
+  const vetoers = new Map<number, string[]>()
+  members.forEach((m) => m.p.veto.forEach((g) => vetoers.set(g, [...(vetoers.get(g) ?? []), m.userId === meId ? 'ти' : firstName(m.name)])))
+  const picks = members.map((m) => m.p.genres.filter((g) => !vetoers.has(g))).filter((p) => p.length)
+  const shared = picks.length ? picks.reduce((acc, p) => acc.filter((g) => p.includes(g))) : []
+  const cover = coverSet(picks)
+  const strictest = members.filter((m) => m.p.maxRuntime).sort((a, b) => a.p.maxRuntime! - b.p.maxRuntime!)[0]
+  const eraSets = members.map((m) => m.p.eras).filter((e) => e.length)
+  const eraOverlap = eraSets.length ? ERAS.filter((e) => eraSets.every((s) => s.includes(e.value))) : []
+  const eraConflict = eraSets.length > 0 && eraOverlap.length === 0
+  const eraShown = eraConflict ? ERAS.filter((e) => eraSets.some((s) => s.includes(e.value))) : eraOverlap
+
+  let looking: string
+  let hint: string | null = null
+  if (!picks.length) looking = 'Під ваші смаки з фільмотек'
+  else if (picks.length === 1) looking = picks[0].map(name).join(', ')
+  else if (shared.length) {
+    looking = shared.map(name).join(', ')
+    hint = shared.length > 1 ? 'хочуть усі' : 'хочуть усі — найкращий варіант'
+  } else {
+    looking = cover.map(name).join(' + ')
+    hint = 'спільного жанру немає — спершу фільми, де є все це разом'
+  }
 
   return (
-    <section className="panel together">
+    <section className="panel together-panel">
       <p className="eyebrow">разом виходить</p>
       <ul className="together-people">
         {members.map((m) => (
@@ -169,13 +220,24 @@ function Together({ room, meId, myPrefs, onRewatch }: { room: RoomState; meId?: 
             <b>{m.userId === meId ? 'Ти' : firstName(m.name)}</b>
             <span className="together-picks">
               <AnimatePresence initial={false}>
-                {m.p.genres.length ? (
-                  m.p.genres.map((g) => (
-                    <motion.em key={g} initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }} className={cover.includes(g) ? 'key' : ''}>
-                      {name(g)}
-                    </motion.em>
-                  ))
-                ) : (
+                {m.p.genres.map((g) => (
+                  <motion.em
+                    key={`w${g}`}
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0, opacity: 0 }}
+                    className={vetoers.has(g) ? 'lost' : shared.includes(g) || cover.includes(g) ? 'key' : ''}
+                    title={vetoers.has(g) ? `Не хоче: ${vetoers.get(g)!.join(', ')}` : undefined}
+                  >
+                    ♥ {name(g)}
+                  </motion.em>
+                ))}
+                {m.p.veto.map((g) => (
+                  <motion.em key={`v${g}`} initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }} className="no">
+                    ✕ {name(g)}
+                  </motion.em>
+                ))}
+                {!m.p.genres.length && !m.p.veto.length && (
                   <motion.small key="none" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                     будь-що
                   </motion.small>
@@ -186,23 +248,25 @@ function Together({ room, meId, myPrefs, onRewatch }: { room: RoomState; meId?: 
         ))}
       </ul>
       <div className="together-result">
-        <div>
+        <div className="wide">
           <span className="label">Шукаємо</span>
-          <b>
-            {pickers.length > 1 && cover.length > 1
-              ? `${cover.map(name).join(' + ')} — щоб пасувало всім`
-              : cover.length
-                ? cover.map(name).join(', ')
-                : 'Під ваші смаки з фільмотек'}
-          </b>
+          <b>{looking}</b>
+          {hint && <small className="together-hint">{hint}</small>}
+          {vetoers.size > 0 && (
+            <small className="together-veto">
+              без: {[...vetoers.entries()].map(([g, who]) => `${lower(g)} (${who.join(', ')})`).join(', ')}
+            </small>
+          )}
         </div>
         <div>
           <span className="label">Тривалість</span>
-          <b>{strictest ? `${RUNTIMES.find((r) => r.value === strictest.p.maxRuntime)?.label} · ${strictest.userId === meId ? 'твоє' : `так хоче ${firstName(strictest.name)}`}` : 'будь-яка'}</b>
+          <b>{strictest ? RUNTIMES.find((r) => r.value === strictest.p.maxRuntime)?.label : 'будь-яка'}</b>
+          {strictest && <small className="together-hint">{strictest.userId === meId ? 'твій ліміт' : `так хоче ${firstName(strictest.name)}`}</small>}
         </div>
         <div>
-          <span className="label">Епоха</span>
-          <b>{eras.length ? eras.map((e) => ERAS.find((x) => x.value === e)?.short).join(' або ') : 'будь-яка'}</b>
+          <span className="label">Роки</span>
+          <b>{eraShown.length ? eraShown.map((e) => e.short).join(' або ') : 'будь-які'}</b>
+          {eraConflict && <small className="together-veto">не перетинаються — беремо всі обрані</small>}
         </div>
       </div>
       <label className="filter-row rewatch-row">
@@ -323,9 +387,10 @@ export function Lobby({ room, meId, onRoom }: { room: RoomState; meId?: string; 
     }
   }
 
-  const ready = room.members.filter((m) => (m.userId === meId ? prefs : prefsOf(m)).genres.length > 0).length
+  const picked = (p: Prefs) => p.genres.length + p.veto.length > 0
+  const ready = room.members.filter((m) => picked(m.userId === meId ? prefs : prefsOf(m))).length
   const moods: Record<string, Mood> = Object.fromEntries(
-    room.members.map((m) => [m.userId, (m.userId === meId ? prefs : prefsOf(m)).genres.length ? 'excited' : m.isHost ? 'happy' : 'idle']),
+    room.members.map((m) => [m.userId, picked(m.userId === meId ? prefs : prefsOf(m)) ? 'excited' : m.isHost ? 'happy' : 'idle']),
   )
 
   return (
@@ -337,6 +402,7 @@ export function Lobby({ room, meId, onRoom }: { room: RoomState; meId?: string; 
       </div>
       <MoodPanel room={room} meId={meId} prefs={prefs} onChange={changePrefs} />
       <Together room={view} meId={meId} myPrefs={prefs} onRewatch={changeRewatch} />
+      <Proposals room={room} meId={meId} onRoom={onRoom} title="Є свій фільм на сьогодні?" />
       <InviteFriends room={room} />
       <Link to="/library" className="link-btn center">
         Додай переглянуті фільми — підбірка буде точнішою →

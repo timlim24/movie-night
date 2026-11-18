@@ -30,6 +30,11 @@ resource "aws_cloudfront_function" "spa" {
   code    = <<-EOT
     function handler(event) {
       var req = event.request;
+      var host = req.headers.host ? req.headers.host.value : '';
+      if (host.indexOf('www.') === 0) {
+        return { statusCode: 301, statusDescription: 'Moved Permanently',
+                 headers: { location: { value: 'https://' + host.slice(4) + req.uri } } };
+      }
       var last = req.uri.split('/').pop();
       if (last.indexOf('.') === -1) { req.uri = '/index.html'; }
       return req;
@@ -55,6 +60,7 @@ resource "aws_cloudfront_distribution" "web" {
   comment             = local.name
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
+  aliases             = local.custom_domain ? [var.domain_name, "www.${var.domain_name}"] : []
 
   origin {
     origin_id                = "web"
@@ -105,7 +111,10 @@ resource "aws_cloudfront_distribution" "web" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = !local.custom_domain
+    acm_certificate_arn            = local.custom_domain ? aws_acm_certificate_validation.web[0].certificate_arn : null
+    ssl_support_method             = local.custom_domain ? "sni-only" : null
+    minimum_protocol_version       = local.custom_domain ? "TLSv1.2_2021" : null
   }
 }
 

@@ -46,3 +46,21 @@ variable "donate_url" {
   type        = string
   default     = ""
 }
+
+variable "domain_name" {
+  description = "Custom domain for the app, e.g. movienight.click. Empty = CloudFront's own *.cloudfront.net address"
+  type        = string
+  default     = ""
+}
+
+variable "hosted_zone" {
+  description = "Route 53 hosted zone holding domain_name, if it differs (e.g. domain app.example.com in zone example.com)"
+  type        = string
+  default     = ""
+}
+
+variable "extra_app_urls" {
+  description = "Other addresses the app is opened from (e.g. a *.pages.dev proxy), comma-separated — added to Cognito's allowed callbacks"
+  type        = string
+  default     = ""
+}

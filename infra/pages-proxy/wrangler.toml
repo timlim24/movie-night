@@ -1,0 +1,4 @@
+# Deployed by scripts/deploy-pages-proxy.sh. ORIGIN is the CloudFront URL (terraform output app_url).
+name = "movienight-ucu"
+pages_build_output_dir = "public"
+compatibility_date = "2025-06-01"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from app.library import api as library
+from app.movies import api as movies
 from app.recommendations import api as recs
 from app.rooms import logic
 from app.rooms import repository as repo
@@ -64,6 +65,7 @@ def view(user: CurrentUser, meta: dict, members: list[dict], include_deck: bool 
             "likes": sum(1 for k, v in (m.get("votes") or {}).items() if v and int(k) in deck_ids),
             "lastVote": m.get("lastVote"),
             "prefs": m.get("prefs") or {},
+            "proposals": m.get("proposals") or [],
         }
         for m in members
     ]
@@ -169,12 +171,17 @@ def set_mascot(user: CurrentUser, code: str, mascot: str) -> dict:
 
 
 def _build_deck(meta: dict, members: list[dict], exclude: set[int]) -> list[dict]:
+    """Recommendations for the room plus everyone's own proposals. Proposals are used up by the deck."""
     with ThreadPoolExecutor(max_workers=max(1, len(members))) as pool:
         libraries = list(pool.map(lambda m: library.get_library(m["userId"]), members))
     rec_members = [recs.Member(user_id=m["userId"], name=m["name"], library=lib) for m, lib in zip(members, libraries)]
     include_rewatch = clean_settings(meta.get("filters"))["includeRewatch"]
     filters = recs.Filters.from_dict(logic.combine(members, include_rewatch))
-    return recs.build_deck(rec_members, filters, exclude=exclude)
+    deck = recs.build_deck(rec_members, filters, exclude=exclude, pinned=logic.pinned(members, exclude))
+    for m in members:
+        if m.get("proposals"):
+            repo.update_member(meta["code"], m["userId"], {"proposals": []})
+    return deck
 
 
 def start(user: CurrentUser, code: str) -> dict:
@@ -288,3 +295,27 @@ def live(user: CurrentUser) -> dict:
         ],
         "friendRooms": [r for r in friend_rooms if r["friends"]],
     }
+
+
+# ── members' own suggestions for the next deck ───────────────────────────────
+
+
+def propose(user: CurrentUser, code: str, movie_id: int) -> dict:
+    meta, members = _load(code)
+    me = _require_member(user, members)
+    if meta["status"] == "done":
+        raise Conflict("Ця кімната вже обрала фільм")
+    card = movies.details(movie_id)
+    try:
+        proposals = logic.add_proposal(me.get("proposals") or [], card, set(meta.get("seenIds") or []))
+    except ValueError as e:
+        raise DomainError(str(e)) from e
+    repo.update_member(meta["code"], user.id, {"proposals": proposals})
+    return state(user, meta["code"], include_deck=False)
+
+
+def unpropose(user: CurrentUser, code: str, movie_id: int) -> dict:
+    meta, members = _load(code)
+    me = _require_member(user, members)
+    repo.update_member(meta["code"], user.id, {"proposals": [p for p in me.get("proposals") or [] if p["id"] != movie_id]})
+    return state(user, meta["code"], include_deck=False)
